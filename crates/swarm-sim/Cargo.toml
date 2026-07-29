@@ -1,0 +1,16 @@
+[package]
+name = "swarm-sim"
+version = "0.1.0"
+description = "Deterministic network simulator for swarm-core. No sockets, no threads, no clock."
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+swarm-core.workspace = true
+# ChaCha8Rng rather than rand::StdRng: StdRng's docs disclaim value stability
+# across releases, so a routine `cargo update` could silently change what seed 42
+# produces. See docs/spec.md §8.
+rand_chacha = "0.3"
+rand_core = "0.6"
+blake3 = "1"

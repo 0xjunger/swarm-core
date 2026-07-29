@@ -1,0 +1,18 @@
+# Mechanical enforcement of DESIGN.md §11.1 — "no std::net, std::time, tokio, or
+# rand::thread_rng; time, network and randomness always enter as parameters."
+#
+# swarm-core is #![no_std], so it cannot reach any of these already. These lints
+# cover swarm-sim, and every crate Phase 2 adds, where std IS available and the
+# rule would otherwise rely on memory.
+
+disallowed-types = [
+    { path = "std::collections::HashMap", reason = "RandomState is seeded per process, so iteration order differs between runs. Use BTreeMap. See docs/spec.md §3.1." },
+    { path = "std::collections::HashSet", reason = "Same nondeterministic iteration order as HashMap. Use BTreeSet. See docs/spec.md §3.1." },
+    { path = "std::time::SystemTime", reason = "DESIGN.md §7: no wall clock, anywhere. Time enters as LogicalTime." },
+    { path = "std::time::Instant", reason = "DESIGN.md §7: no wall clock, anywhere. Time enters as LogicalTime." },
+]
+
+disallowed-methods = [
+    { path = "rand::thread_rng", reason = "DESIGN.md §11.1: randomness is injected, never implicitly seeded." },
+    { path = "std::thread::sleep", reason = "DESIGN.md §M0: the simulator advances by ticks, never by real time." },
+]

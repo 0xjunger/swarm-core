@@ -1,0 +1,11 @@
+[package]
+name = "swarm-core"
+version = "0.1.0"
+description = "Verifiable swarm coordination: pure, no_std, sans-I/O state machine."
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# Intentionally empty. A zero-dependency core is worth preserving as long as it
+# can be; blake3 and ed25519-dalek arrive at M1. See docs/spec.md §8.
+[dependencies]

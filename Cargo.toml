@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = ["crates/swarm-core", "crates/swarm-sim"]
+
+[workspace.package]
+edition = "2021"
+license = "Apache-2.0"
+rust-version = "1.94"
+
+[workspace.dependencies]
+swarm-core = { path = "crates/swarm-core" }
+blake3 = { version = "1", default-features = false }
+rand_chacha = { version = "0.3", default-features = false }
+rand_core = { version = "0.6", default-features = false }
