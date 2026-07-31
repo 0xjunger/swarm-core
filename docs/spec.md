@@ -90,6 +90,27 @@ of bug M0's byte-identical criterion exists to catch. Under `no_std`, `BTreeMap`
 the only available map, and its iteration order is a deterministic function of its
 contents.
 
+### 3.1.1 `NodeId` deliberately does not derive `Hash`
+
+*Normative — M0.*
+
+`NodeId` derives `Ord` but **not** `Hash`. Do not add it.
+
+This was found by experiment rather than by design: an attempt to reproduce the
+nondeterminism bug on purpose — by iterating the roster through a `HashSet` instead
+of in `NodeId` order — did not compile. `HashSet<NodeId>` requires `NodeId: Hash`,
+so the type system refused the bug before Clippy or any test was involved.
+
+That makes it a real defence layer rather than an accident, and it is the cheapest
+of the three: it costs nothing and it fails at compile time. Adding `Hash` would
+silently remove it. The temptation will arrive at M2, when someone reaches for a
+`HashMap` while building the version vector; the answer there is `BTreeMap`.
+
+(For the record, the experiment was completed by adding `Hash` temporarily. Three
+determinism tests then failed, and two runs of the same binary at the same seed
+produced 916 differing trace lines. The guard tests in §"Tests" continued to pass,
+correctly: only the determinism claim had broken.)
+
 ### 3.2 Why the pure signature
 
 `step` takes `&State` and returns a new `State` rather than taking `&mut self`. This
