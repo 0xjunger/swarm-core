@@ -10,11 +10,16 @@
 //! order differs between two runs of the same binary. That is exactly the class of
 //! bug M0's byte-identical-trace criterion exists to catch. See `docs/spec.md` §3.1.
 //!
-//! # M0 scope
+//! # Scope
 //!
-//! There is no protocol here yet. Node behaviour is a placeholder — count what
-//! arrives, echo it back — because M0 tests the *channel*, not the protocol. The
-//! `Payload` type becomes `Entry` at M1.
+//! M0's placeholder behaviour is still in place: count what arrives, echo it
+//! back — because M0 tests the *channel*, not the protocol. The `Payload`
+//! token becomes `Entry` at M2, when nodes begin broadcasting entries.
+//!
+//! M1 adds the protocol's foundation, specified in `docs/spec-m1.md`:
+//! [`wire`] (Entry, canonical encoding, domain-separated Ed25519 signing),
+//! [`log`] (the per-node hash chain and its end-to-end verifier) and
+//! [`causal`] (the version vector, empty until M2).
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -23,6 +28,10 @@ extern crate alloc;
 
 #[cfg(test)]
 extern crate std;
+
+pub mod causal;
+pub mod log;
+pub mod wire;
 
 use alloc::vec::Vec;
 
@@ -52,7 +61,8 @@ pub struct NodeId(pub u8);
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct LogicalTime(pub u64);
 
-/// The M0 placeholder message. Becomes `Entry` (`DESIGN.md` §3) at M1.
+/// The M0 placeholder message. Becomes `Entry` (`DESIGN.md` §3) at M2, when
+/// nodes broadcast entries rather than tokens.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Payload {
     /// Node that first emitted this token.
@@ -86,8 +96,10 @@ pub enum Effect {
 
 /// Everything a node knows.
 ///
-/// Grows into the per-node log, version vector and CRDTs over M1–M5. It must stay
-/// `Clone`, because [`step`] is pure — see the note on the signature below.
+/// Grows into the per-node log, version vector and CRDTs over M2–M5 (M1's
+/// [`log::Log`] lives beside it until the simulator needs them together). It
+/// must stay `Clone`, because [`step`] is pure — see the note on the
+/// signature below.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct State {
     /// This node's own identity.

@@ -10,5 +10,8 @@ rust-version = "1.94"
 [workspace.dependencies]
 swarm-core = { path = "crates/swarm-core" }
 blake3 = { version = "1", default-features = false }
+# default-features off: no implicit `rand_core`, no `std`. swarm-core is
+# no_std; the `alloc` feature is added where the crate is used.
+ed25519-dalek = { version = "2", default-features = false }
 rand_chacha = { version = "0.3", default-features = false }
 rand_core = { version = "0.6", default-features = false }
