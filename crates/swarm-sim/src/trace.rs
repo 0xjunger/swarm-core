@@ -9,7 +9,8 @@
 //! decisions.
 
 use std::fmt::Write as _;
-use swarm_core::{NodeId, Payload};
+use swarm_core::causal::VersionVector;
+use swarm_core::{Envelope, NodeId};
 
 /// One observable event.
 ///
@@ -27,7 +28,7 @@ pub enum TraceRecord {
         at: u64,
         from: NodeId,
         to: NodeId,
-        payload: Payload,
+        payload: Envelope,
     },
     /// The channel accepted the message and scheduled it.
     Enqueue {
@@ -41,7 +42,7 @@ pub enum TraceRecord {
         at: u64,
         from: NodeId,
         to: NodeId,
-        payload: Payload,
+        payload: Envelope,
     },
     DropLoss {
         at: u64,
@@ -61,6 +62,32 @@ pub enum TraceRecord {
     Partition {
         at: u64,
         groups: String,
+    },
+    /// A node applied entry `(origin, seq)` to its state (`docs/spec-m2.md`
+    /// §4). Derived by diffing `State` before/after a `step` call — `step`
+    /// itself stays pure and returns only `Effect`s (`docs/spec.md` §3.2).
+    Apply {
+        at: u64,
+        node: NodeId,
+        origin: NodeId,
+        seq: u64,
+    },
+    /// A node buffered entry `(origin, seq)`: received, but its causal
+    /// dependencies are not yet satisfied (`docs/spec-m2.md` §5).
+    Buffer {
+        at: u64,
+        node: NodeId,
+        origin: NodeId,
+        seq: u64,
+    },
+    /// A node's causal buffer was full and `(origin, seq)` was evicted to
+    /// make room (`docs/spec-m2.md` §5). Recoverable: the next anti-entropy
+    /// round re-offers it.
+    DropCausalOverflow {
+        at: u64,
+        node: NodeId,
+        origin: NodeId,
+        seq: u64,
     },
     Final {
         node: NodeId,
@@ -89,7 +116,7 @@ impl TraceRecord {
                     "t={at:012} SEND from={:03} to={:03} {}",
                     from.0,
                     to.0,
-                    render_payload(payload)
+                    render_envelope(payload)
                 );
             }
             Self::Enqueue {
@@ -116,7 +143,7 @@ impl TraceRecord {
                     "t={at:012} DELIVER from={:03} to={:03} {}",
                     from.0,
                     to.0,
-                    render_payload(payload)
+                    render_envelope(payload)
                 );
             }
             Self::DropLoss { at, from, to } => {
@@ -143,6 +170,42 @@ impl TraceRecord {
             Self::Partition { at, groups } => {
                 let _ = writeln!(out, "t={at:012} PARTITION {groups}");
             }
+            Self::Apply {
+                at,
+                node,
+                origin,
+                seq,
+            } => {
+                let _ = writeln!(
+                    out,
+                    "t={at:012} APPLY node={:03} origin={:03} seq={seq:012}",
+                    node.0, origin.0
+                );
+            }
+            Self::Buffer {
+                at,
+                node,
+                origin,
+                seq,
+            } => {
+                let _ = writeln!(
+                    out,
+                    "t={at:012} BUFFER node={:03} origin={:03} seq={seq:012}",
+                    node.0, origin.0
+                );
+            }
+            Self::DropCausalOverflow {
+                at,
+                node,
+                origin,
+                seq,
+            } => {
+                let _ = writeln!(
+                    out,
+                    "t={at:012} DROP_CAUSAL_OVERFLOW node={:03} origin={:03} seq={seq:012}",
+                    node.0, origin.0
+                );
+            }
             Self::Final { node, recv, sent } => {
                 let _ = writeln!(
                     out,
@@ -154,11 +217,25 @@ impl TraceRecord {
     }
 }
 
-fn render_payload(p: &Payload) -> String {
-    format!(
-        "origin={:03} seq={:012} hops={:03}",
-        p.origin.0, p.seq, p.hops
-    )
+fn render_envelope(e: &Envelope) -> String {
+    match e {
+        Envelope::Entry(entry) => {
+            format!(
+                "kind=ENTRY origin={:03} seq={:012}",
+                entry.node.0, entry.seq
+            )
+        }
+        Envelope::AntiEntropy(vv) => format!("kind=ANTI_ENTROPY vv=[{}]", render_vv(vv)),
+    }
+}
+
+/// `(node, seq)` pairs ascending by `NodeId`, comma-joined — the same idiom
+/// as `Partition::render`.
+fn render_vv(vv: &VersionVector) -> String {
+    vv.iter()
+        .map(|(n, s)| format!("{:03}:{s:012}", n.0))
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 /// An ordered sequence of records: everything that happened in one run.
@@ -209,13 +286,28 @@ impl Trace {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ed25519_dalek::SigningKey;
+    use swarm_core::wire::{Body, Hash, UnsignedEntry, PHASE1_EPOCH, PHASE1_MISSION_ID};
 
-    fn payload() -> Payload {
-        Payload {
-            origin: NodeId(1),
+    /// A real signed entry, authored by node 1 at seq 7 — matches the
+    /// M1/M0 tests' convention of a deterministic, test-only key.
+    fn entry() -> swarm_core::wire::Entry {
+        let mut bytes = [0u8; 32];
+        bytes[0] = 1;
+        let key = SigningKey::from_bytes(&bytes);
+        UnsignedEntry {
+            mission_id: PHASE1_MISSION_ID,
+            epoch: PHASE1_EPOCH,
+            node: NodeId(1),
             seq: 7,
-            hops: 2,
+            prev: Hash::ZERO,
+            deps: VersionVector::new(),
+            body: Body::TaskClaim {
+                task: 3,
+                priority: 1,
+            },
         }
+        .sign(&key)
     }
 
     #[test]
@@ -226,13 +318,31 @@ mod tests {
             at: 12,
             from: NodeId(1),
             to: NodeId(3),
-            payload: payload(),
+            payload: Envelope::Entry(entry()),
         });
 
         assert_eq!(
             t.render(),
             "t=000000000012 TICK\n\
-             t=000000000012 DELIVER from=001 to=003 origin=001 seq=000000000007 hops=002\n"
+             t=000000000012 DELIVER from=001 to=003 kind=ENTRY origin=001 seq=000000000007\n"
+        );
+    }
+
+    #[test]
+    fn anti_entropy_renders_its_version_vector() {
+        let mut vv = VersionVector::new();
+        vv.bump(NodeId(0), 2);
+        vv.bump(NodeId(2), 5);
+        let mut t = Trace::default();
+        t.push(TraceRecord::Send {
+            at: 1,
+            from: NodeId(0),
+            to: NodeId(1),
+            payload: Envelope::AntiEntropy(vv),
+        });
+        assert_eq!(
+            t.render(),
+            "t=000000000001 SEND from=000 to=001 kind=ANTI_ENTROPY vv=[000:000000000002,002:000000000005]\n"
         );
     }
 

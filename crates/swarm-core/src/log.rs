@@ -15,7 +15,11 @@ use crate::wire::{
 use crate::NodeId;
 
 /// A node's hash chain: append-only, signed, linked.
-#[derive(Clone, Debug)]
+///
+/// `PartialEq`/`Eq` derive cleanly: `SigningKey` implements both (a
+/// constant-time comparison), which is what lets [`crate::State`] keep
+/// deriving them once it embeds a `Log` (`docs/spec-m2.md` §7).
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Log {
     me: NodeId,
     key: SigningKey,
@@ -80,7 +84,12 @@ impl Log {
 
     /// Appends a new entry: links it to the current head, signs it, records
     /// it. Returns the recorded entry.
-    pub fn append(&mut self, body: Body) -> Result<&Entry, LogError> {
+    ///
+    /// `deps` is the caller's causal snapshot at the moment of authorship
+    /// (`docs/spec-m2.md` §3) — empty at M1, populated from M2 onward. The
+    /// field is activated here, not reinterpreted: M1 callers pass
+    /// `VersionVector::new()` and their behaviour is unchanged.
+    pub fn append(&mut self, body: Body, deps: VersionVector) -> Result<&Entry, LogError> {
         if self.entries.len() == self.cap {
             return Err(LogError::Full);
         }
@@ -91,7 +100,7 @@ impl Log {
             node: self.me,
             seq: self.next_seq(),
             prev,
-            deps: VersionVector::new(),
+            deps,
             body,
         }
         .sign(&self.key);
@@ -131,25 +140,73 @@ pub enum ChainError {
     BadSignature { index: usize },
 }
 
+/// Verifies a single entry against a specific expected position in some
+/// chain (`docs/spec-m1.md` §4.4, minus the single-author check, which only
+/// makes sense across a batch — see [`verify_chain`]).
+///
+/// The check order is fixed: membership, mission, epoch, seq, link,
+/// signature. `index` is only used to label errors; callers outside a batch
+/// (M2's causal delivery, `docs/spec-m2.md` §4) may pass `0`.
+pub fn verify_next(
+    roster: &Roster,
+    index: usize,
+    expected_seq: u64,
+    expected_prev: Hash,
+    entry: &Entry,
+) -> Result<VerifiedEntry, ChainError> {
+    let Some(key) = roster.key(entry.node) else {
+        return Err(ChainError::UnknownNode {
+            index,
+            node: entry.node,
+        });
+    };
+    if entry.mission_id != roster.mission_id {
+        return Err(ChainError::WrongMission { index });
+    }
+    if entry.epoch != roster.epoch {
+        return Err(ChainError::WrongEpoch { index });
+    }
+    if entry.seq != expected_seq {
+        return Err(ChainError::BadSeq {
+            index,
+            expected: expected_seq,
+            found: entry.seq,
+        });
+    }
+    if entry.prev != expected_prev {
+        return Err(ChainError::BadPrevLink { index });
+    }
+    if key
+        .verify_strict(&entry.signing_bytes(), &entry.sig)
+        .is_err()
+    {
+        return Err(ChainError::BadSignature { index });
+    }
+
+    Ok(VerifiedEntry::from_verified(entry.clone()))
+}
+
 /// Verifies a chain end to end (`docs/spec-m1.md` §4.4) and returns its
 /// entries as [`VerifiedEntry`], or the first failure.
 ///
 /// The check order is fixed: membership, single-author, mission, epoch, seq,
-/// link, signature. An empty chain verifies to an empty result.
+/// link, signature. An empty chain verifies to an empty result. Per-entry
+/// checks (everything but single-author) are delegated to [`verify_next`].
 pub fn verify_chain(roster: &Roster, entries: &[Entry]) -> Result<Vec<VerifiedEntry>, ChainError> {
     let mut verified = Vec::with_capacity(entries.len());
     let mut expected_prev = Hash::ZERO;
 
     for (index, entry) in entries.iter().enumerate() {
-        // seq must be contiguous from 0, so the expected value at `index` is
-        // `index` itself. Enforcing it here is invariant I1 at M1.
-        let expected_seq = index as u64;
-        let Some(key) = roster.key(entry.node) else {
+        // Membership is checked here too (not only inside `verify_next`) so
+        // that its error takes precedence over single-author, matching the
+        // fixed check order membership -> single-author -> ... (unchanged
+        // from M1).
+        if roster.key(entry.node).is_none() {
             return Err(ChainError::UnknownNode {
                 index,
                 node: entry.node,
             });
-        };
+        }
         if index > 0 && entry.node != entries[0].node {
             return Err(ChainError::ChainNodeMismatch {
                 index,
@@ -157,31 +214,11 @@ pub fn verify_chain(roster: &Roster, entries: &[Entry]) -> Result<Vec<VerifiedEn
                 found: entry.node,
             });
         }
-        if entry.mission_id != roster.mission_id {
-            return Err(ChainError::WrongMission { index });
-        }
-        if entry.epoch != roster.epoch {
-            return Err(ChainError::WrongEpoch { index });
-        }
-        if entry.seq != expected_seq {
-            return Err(ChainError::BadSeq {
-                index,
-                expected: expected_seq,
-                found: entry.seq,
-            });
-        }
-        if entry.prev != expected_prev {
-            return Err(ChainError::BadPrevLink { index });
-        }
-        if key
-            .verify_strict(&entry.signing_bytes(), &entry.sig)
-            .is_err()
-        {
-            return Err(ChainError::BadSignature { index });
-        }
-
-        verified.push(VerifiedEntry::from_verified(entry.clone()));
-        expected_prev = entry.chain_hash();
+        // seq must be contiguous from 0, so the expected value at `index` is
+        // `index` itself. Enforcing it here is invariant I1 at M1.
+        let v = verify_next(roster, index, index as u64, expected_prev, entry)?;
+        expected_prev = v.entry().chain_hash();
+        verified.push(v);
     }
 
     Ok(verified)
@@ -210,7 +247,7 @@ mod tests {
     #[test]
     fn the_genesis_entry_links_to_zero() {
         let mut log = Log::new(NodeId(0), key(0), 4);
-        log.append(claim(0)).unwrap();
+        log.append(claim(0), VersionVector::new()).unwrap();
         assert_eq!(log.entries()[0].prev, Hash::ZERO);
         assert_eq!(log.entries()[0].seq, 0);
     }
@@ -218,8 +255,8 @@ mod tests {
     #[test]
     fn each_entry_links_to_its_predecessors_full_encoding() {
         let mut log = Log::new(NodeId(0), key(0), 4);
-        log.append(claim(0)).unwrap();
-        log.append(claim(1)).unwrap();
+        log.append(claim(0), VersionVector::new()).unwrap();
+        log.append(claim(1), VersionVector::new()).unwrap();
         assert_eq!(log.entries()[1].prev, log.entries()[0].chain_hash());
     }
 
@@ -228,7 +265,7 @@ mod tests {
         let k = key(0);
         let mut log = Log::new(NodeId(0), k.clone(), 4);
         for i in 0..4 {
-            log.append(claim(i)).unwrap();
+            log.append(claim(i), VersionVector::new()).unwrap();
         }
         assert_eq!(
             verify_chain(&roster_of(NodeId(0), &k), log.entries())
@@ -241,9 +278,12 @@ mod tests {
     #[test]
     fn a_full_log_refuses_to_grow() {
         let mut log = Log::new(NodeId(0), key(0), 2);
-        log.append(claim(0)).unwrap();
-        log.append(claim(1)).unwrap();
-        assert_eq!(log.append(claim(2)), Err(LogError::Full));
+        log.append(claim(0), VersionVector::new()).unwrap();
+        log.append(claim(1), VersionVector::new()).unwrap();
+        assert_eq!(
+            log.append(claim(2), VersionVector::new()),
+            Err(LogError::Full)
+        );
         assert_eq!(log.len(), 2);
     }
 

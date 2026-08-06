@@ -1,17 +1,20 @@
 //! Invariant tests — written before the code that satisfies them, per
 //! `DESIGN.md` §11.7 ("Sıralamayı ters kur: önce invariant, sonra kod").
 //!
-//! At M1 only **I1** is testable: there is one node, no network, no CRDT and
-//! no escrow. I2–I6 are recorded at the bottom of this file with the
-//! milestone that activates each, so they are not silently decided by
-//! implementation accident.
+//! At M1 only I1 was testable: one node, no network, no CRDT, no escrow.
+//! M2 activates I2 and I3 (`docs/spec-m2.md` §9); I4–I6 are still recorded
+//! at the bottom of this file as documented placeholders. `tests/causal.rs`
+//! covers the causal-delivery *mechanism* in depth (multi-origin deps, the
+//! buffer bound, anti-entropy) — the tests here restate I2 and I3
+//! specifically as invariants, minimally, so each stands on its own.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use ed25519_dalek::SigningKey;
+use swarm_core::causal::VersionVector;
 use swarm_core::log::{verify_chain, ChainError, Log};
-use swarm_core::wire::{Body, Roster, PHASE1_EPOCH, PHASE1_MISSION_ID};
-use swarm_core::NodeId;
+use swarm_core::wire::{Body, Entry, Hash, Roster, UnsignedEntry, PHASE1_EPOCH, PHASE1_MISSION_ID};
+use swarm_core::{step, Envelope, Event, LogicalTime, NodeId, State};
 
 /// Deterministic test key. Keys are injected, never generated: randomness
 /// does not enter `swarm-core` at all (`DESIGN.md` §11.1).
@@ -43,7 +46,7 @@ fn claim(task: u64) -> Body {
 fn i1_construction_never_reuses_a_seq() {
     let mut log = Log::new(NodeId(0), test_key(0), 64);
     for i in 0..50 {
-        log.append(claim(i)).unwrap();
+        log.append(claim(i), VersionVector::new()).unwrap();
     }
 
     let pairs: Vec<(NodeId, u64)> = log.entries().iter().map(|e| (e.node, e.seq)).collect();
@@ -64,7 +67,7 @@ fn i1_a_duplicated_seq_never_verifies() {
     let key = test_key(0);
     let mut log = Log::new(NodeId(0), key.clone(), 16);
     for i in 0..8 {
-        log.append(claim(i)).unwrap();
+        log.append(claim(i), VersionVector::new()).unwrap();
     }
 
     // Duplicate entry 3: (node 0, seq 3) now appears twice.
@@ -86,18 +89,149 @@ fn i1_a_duplicated_seq_never_verifies() {
 }
 
 // ---------------------------------------------------------------------------
-// Documented placeholders — not testable at M1, deliberately not stubbed.
+// M2 helpers — a 3-node roster (author `A`, two observers `P`, `Q`) and a
+// hand-built chain, so I2/I3 can be exercised without a simulator.
+// ---------------------------------------------------------------------------
+
+fn m2_roster() -> (Roster, [SigningKey; 3]) {
+    let keys = [test_key(11), test_key(12), test_key(13)];
+    let mut m = BTreeMap::new();
+    for (i, k) in keys.iter().enumerate() {
+        m.insert(NodeId(i as u8), k.verifying_key());
+    }
+    (Roster::new(PHASE1_MISSION_ID, PHASE1_EPOCH, m), keys)
+}
+
+/// `A`'s chain, built by hand with the self-inclusive `deps` M2 specifies
+/// (`docs/spec-m2.md` §3): each entry's `deps` names only its author's own
+/// immediate predecessor.
+fn a_chain(a: NodeId, key: &SigningKey) -> [Entry; 3] {
+    let e0 = UnsignedEntry {
+        mission_id: PHASE1_MISSION_ID,
+        epoch: PHASE1_EPOCH,
+        node: a,
+        seq: 0,
+        prev: Hash::ZERO,
+        deps: VersionVector::new(),
+        body: claim(0),
+    }
+    .sign(key);
+    let mut deps1 = VersionVector::new();
+    deps1.bump(a, 0);
+    let e1 = UnsignedEntry {
+        mission_id: PHASE1_MISSION_ID,
+        epoch: PHASE1_EPOCH,
+        node: a,
+        seq: 1,
+        prev: e0.chain_hash(),
+        deps: deps1,
+        body: claim(1),
+    }
+    .sign(key);
+    let mut deps2 = VersionVector::new();
+    deps2.bump(a, 1);
+    let e2 = UnsignedEntry {
+        mission_id: PHASE1_MISSION_ID,
+        epoch: PHASE1_EPOCH,
+        node: a,
+        seq: 2,
+        prev: e1.chain_hash(),
+        deps: deps2,
+        body: claim(2),
+    }
+    .sign(key);
+    [e0, e1, e2]
+}
+
+fn deliver(state: &State, from: NodeId, entry: Entry, at: u64) -> State {
+    let (next, _) = step(
+        state,
+        Event::Recv {
+            from,
+            payload: Envelope::Entry(entry),
+        },
+        LogicalTime(at),
+    );
+    next
+}
+
+// ---------------------------------------------------------------------------
+// I2 — an entry is not applied before its deps are delivered
+// ---------------------------------------------------------------------------
+
+/// Minimal restatement of I2 as an invariant test: `docs/spec-m2.md` §4's
+/// delivery rule is what enforces it. `tests/causal.rs`'s
+/// `i2_an_entry_is_not_applied_before_all_its_cross_node_deps_are_delivered`
+/// exercises the harder multi-origin case; this is the one-dependency case,
+/// kept here so I2 has a test that names it directly.
+#[test]
+fn i2_an_entry_is_not_applied_before_its_deps_are_delivered() {
+    let (roster, keys) = m2_roster();
+    let a = NodeId(0);
+    let observer = NodeId(2);
+    let [e0, e1, _] = a_chain(a, &keys[0]);
+
+    let s = State::new(observer, roster, keys[2].clone(), 64, 8, 0, 0);
+    let s = deliver(&s, a, e1.clone(), 1);
+    assert_eq!(
+        s.causal_vv().highest(a),
+        None,
+        "I2 violated: e1 applied before e0, its dependency, was delivered"
+    );
+    assert_eq!(s.buffer_keys().collect::<Vec<_>>(), [(a, 1)]);
+
+    let s = deliver(&s, a, e0, 2);
+    assert_eq!(s.causal_vv().highest(a), Some(1), "now both are applied");
+}
+
+// ---------------------------------------------------------------------------
+// I3 — two nodes that have seen the same entry set derive the same state
+// ---------------------------------------------------------------------------
+
+#[test]
+fn i3_same_entries_different_arrival_order_converge_to_identical_state() {
+    let (roster, keys) = m2_roster();
+    let a = NodeId(0);
+    let (p, q) = (NodeId(1), NodeId(2));
+    let [e0, e1, e2] = a_chain(a, &keys[0]);
+
+    // P receives them in causal order — never buffers.
+    let p_state = State::new(p, roster.clone(), keys[1].clone(), 64, 8, 0, 0);
+    let p_state = deliver(&p_state, a, e0.clone(), 1);
+    let p_state = deliver(&p_state, a, e1.clone(), 2);
+    let p_state = deliver(&p_state, a, e2.clone(), 3);
+
+    // Q receives the same three entries in reverse — each of the first two
+    // is buffered, then the arrival of e0 drains all of them in one step.
+    let q_state = State::new(q, roster, keys[2].clone(), 64, 8, 0, 0);
+    let q_state = deliver(&q_state, a, e2, 1);
+    let q_state = deliver(&q_state, a, e1, 2);
+    let q_state = deliver(&q_state, a, e0, 3);
+
+    assert_eq!(
+        p_state.causal_vv().highest(a),
+        q_state.causal_vv().highest(a)
+    );
+    assert_eq!(p_state.causal_vv().highest(a), Some(2));
+    assert_eq!(
+        p_state.entries(),
+        q_state.entries(),
+        "I3: same entry set, different arrival order, must derive the same state"
+    );
+    assert_eq!(q_state.buffer_keys().count(), 0, "fully drained");
+}
+
+// ---------------------------------------------------------------------------
+// Documented placeholders — not testable at M2, deliberately not stubbed.
 // Each names the milestone whose acceptance criterion activates it
 // (docs/spec-m1.md §8):
 //
-//   I2 — an entry is not applied before its deps are delivered.
-//        Activates at M2 (causal delivery, 3 nodes).
-//   I3 — two nodes that have seen the same entry set derive the same state.
-//        Activates at M2 (partition {A,B} | {C}, heal, convergence).
 //   I4 — spendable rights across all partitions <= authorised total.
 //        Activates at M5 (escrow counter, 1000 seeds).
 //   I5 — no safety-critical effect without a valid certificate in the log.
 //        Activates with the policy gate (M5).
 //   I6 — every effect is traceable to a signed entry chain.
-//        Activates when step derives effects from entries (M2+).
+//        Activates when step derives effects from entries generally (M5+;
+//        M2 begins this for plain entries, but the full policy-gated claim
+//        is later).
 // ---------------------------------------------------------------------------

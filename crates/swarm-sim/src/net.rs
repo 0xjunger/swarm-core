@@ -5,14 +5,14 @@
 //! delivery time, not at enqueue time (§5.4).
 
 use std::collections::BTreeMap;
-use swarm_core::{NodeId, Payload};
+use swarm_core::{Envelope, NodeId};
 
 /// A message in flight.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Msg {
     pub from: NodeId,
     pub to: NodeId,
-    pub payload: Payload,
+    pub payload: Envelope,
 }
 
 /// Result of accepting a message into the channel.
@@ -89,19 +89,29 @@ impl Network {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use swarm_core::causal::VersionVector;
 
     const A: NodeId = NodeId(0);
     const B: NodeId = NodeId(1);
 
+    /// A message carrying an anti-entropy advertisement — the queue doesn't
+    /// care what kind of `Envelope` it moves, so this avoids pulling
+    /// signing/crypto into pure queue-ordering tests (`Entry` needs a key;
+    /// `AntiEntropy` doesn't).
     fn msg(seq: u64) -> Msg {
+        let mut vv = VersionVector::new();
+        vv.bump(A, seq);
         Msg {
             from: A,
             to: B,
-            payload: Payload {
-                origin: A,
-                seq,
-                hops: 0,
-            },
+            payload: Envelope::AntiEntropy(vv),
+        }
+    }
+
+    fn seq_of(m: &Msg) -> u64 {
+        match &m.payload {
+            Envelope::AntiEntropy(vv) => vv.highest(A).unwrap(),
+            Envelope::Entry(_) => panic!("test messages carry AntiEntropy only"),
         }
     }
 
@@ -121,7 +131,7 @@ mod tests {
         n.enqueue(5, msg(200));
         n.enqueue(7, msg(300));
 
-        let got: Vec<u64> = n.take_due(B, 9).iter().map(|m| m.payload.seq).collect();
+        let got: Vec<u64> = n.take_due(B, 9).iter().map(seq_of).collect();
         // due=5 first; then the two due=7 in enqueue order, never reversed.
         assert_eq!(got, [200, 100, 300]);
     }
@@ -137,7 +147,7 @@ mod tests {
         assert_eq!(third.evicted, Some(first.seq));
         assert_eq!(n.depth(B), 2, "bound must hold after eviction");
 
-        let survivors: Vec<u64> = n.take_due(B, 99).iter().map(|m| m.payload.seq).collect();
+        let survivors: Vec<u64> = n.take_due(B, 99).iter().map(seq_of).collect();
         assert_eq!(survivors, [2, 3]);
     }
 

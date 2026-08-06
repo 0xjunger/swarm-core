@@ -27,10 +27,12 @@ fn main() {
         delay_min: 1,
         delay_max: 5,
         queue_cap: 64,
-        beacon_period: 10,
+        entry_period: 10,
+        anti_entropy_period: 15,
+        log_cap: 1000,
+        buffer_cap: 32,
         // Split the swarm, split it further, then heal it. M2 turns this into a
-        // convergence claim; at M0 it only demonstrates that the channel model
-        // reacts to partitions at all.
+        // convergence claim, demonstrated end to end by the `converge` example.
         partitions: vec![
             (30, Partition::split(&[&roster[0..2], &roster[2..5]])),
             (

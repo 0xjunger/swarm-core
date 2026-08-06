@@ -98,3 +98,85 @@ fn golden_signature_verifies_under_the_golden_key() {
     let other_vk: VerifyingKey = SigningKey::from_bytes(&other).verifying_key();
     assert!(other_vk.verify_strict(&e.signing_bytes(), &e.sig).is_err());
 }
+
+// ---------------------------------------------------------------------------
+// M2: a second, independent golden vector for a *non-empty* `VersionVector`
+// (`docs/spec-m2.md` §10). M1's vector above is unchanged — this is an
+// addition, not a replacement, proving `deps`'s already-frozen encoding
+// (`docs/spec-m1.md` §3.2: `u16 BE` count, then `(node u8, seq u64 BE)`
+// pairs ascending by `NodeId`) holds once the field actually carries data.
+// ---------------------------------------------------------------------------
+
+fn golden_entry_with_deps() -> swarm_core::wire::Entry {
+    let key = SigningKey::from_bytes(&GOLDEN_KEY);
+    let mut deps = VersionVector::new();
+    deps.bump(NodeId(0), 5);
+    deps.bump(NodeId(1), 9);
+    UnsignedEntry {
+        mission_id: PHASE1_MISSION_ID,
+        epoch: PHASE1_EPOCH,
+        node: NodeId(2),
+        seq: 3,
+        prev: Hash::ZERO,
+        deps,
+        body: Body::TaskClaim {
+            task: 42,
+            priority: 7,
+        },
+    }
+    .sign(&key)
+}
+
+/// Computed independently from the spec layout (same method as
+/// `GOLDEN_SIGNING_HEX` above): tag || mission_id || epoch || node || seq ||
+/// prev || deps({0: 5, 1: 9}) || TaskClaim{task: 42, priority: 7}. The deps
+/// segment is `0002` (count) `00` `0000000000000005` (node 0, seq 5) `01`
+/// `0000000000000009` (node 1, seq 9) — ascending by `NodeId`, per R4.
+const GOLDEN_SIGNING_HEX_WITH_DEPS: &str = "535741524d5f454e5452595f5631\
+    0000000000000000000000000000000000000000000000000000000000000000\
+    00000000\
+    02\
+    0000000000000003\
+    0000000000000000000000000000000000000000000000000000000000000000\
+    0002\
+    00\
+    0000000000000005\
+    01\
+    0000000000000009\
+    00\
+    000000000000002a\
+    07";
+
+const GOLDEN_ENCODED_HEX_WITH_DEPS: &str = "535741524d5f454e5452595f5631\
+    0000000000000000000000000000000000000000000000000000000000000000\
+    00000000\
+    02\
+    0000000000000003\
+    0000000000000000000000000000000000000000000000000000000000000000\
+    0002\
+    00\
+    0000000000000005\
+    01\
+    0000000000000009\
+    00\
+    000000000000002a\
+    07\
+    ad10d834ef404ca1401af5e5a40ddf9116ae0884ed934a12925f26c5365cfe0\
+    10dd69da5e955ace58bafc959863c77a485e9e419960f4e3b5ee19474c20873\
+    05";
+
+#[test]
+fn golden_vector_with_a_non_empty_version_vector() {
+    let e = golden_entry_with_deps();
+
+    assert_eq!(
+        hex(&e.signing_bytes()),
+        GOLDEN_SIGNING_HEX_WITH_DEPS,
+        "the non-empty deps encoding changed — if deliberate, update this \
+         file and state the reason in the commit message (DESIGN.md §11.5)"
+    );
+    assert_eq!(hex(&e.encoded()), GOLDEN_ENCODED_HEX_WITH_DEPS);
+
+    let vk = SigningKey::from_bytes(&GOLDEN_KEY).verifying_key();
+    assert!(vk.verify_strict(&e.signing_bytes(), &e.sig).is_ok());
+}

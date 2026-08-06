@@ -12,14 +12,13 @@
 //!
 //! # Scope
 //!
-//! M0's placeholder behaviour is still in place: count what arrives, echo it
-//! back — because M0 tests the *channel*, not the protocol. The `Payload`
-//! token becomes `Entry` at M2, when nodes begin broadcasting entries.
-//!
-//! M1 adds the protocol's foundation, specified in `docs/spec-m1.md`:
-//! [`wire`] (Entry, canonical encoding, domain-separated Ed25519 signing),
-//! [`log`] (the per-node hash chain and its end-to-end verifier) and
-//! [`causal`] (the version vector, empty until M2).
+//! M0's placeholder (count-and-echo) and M1's foundation (`Entry`, the hash
+//! chain, an empty `VersionVector`) are both superseded here: M2 activates
+//! causal delivery and anti-entropy, specified in `docs/spec-m2.md`. Nodes
+//! now author and broadcast real [`wire::Entry`] values, buffer what they
+//! cannot yet apply, and periodically exchange version vectors to close
+//! gaps. [`wire`] and [`log`] are unchanged from M1; [`causal`] gains the
+//! comparison and bookkeeping operations M2 needs.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -33,14 +32,13 @@ pub mod causal;
 pub mod log;
 pub mod wire;
 
+use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
-/// How many times a message may be echoed before it dies.
-///
-/// Without a limit the echo would bounce forever and the number of messages in
-/// flight would grow without bound. `DESIGN.md` §7 requires every structure in this
-/// system to have a stated bound; the habit starts here.
-pub const MAX_HOPS: u8 = 4;
+use ed25519_dalek::SigningKey;
+
+use causal::VersionVector;
+use wire::{Body, Hash, Roster, VerifiedEntry};
 
 /// A member of the roster.
 ///
@@ -55,102 +53,266 @@ pub struct NodeId(pub u8);
 ///
 /// There is no wall clock at any layer. `DESIGN.md` §7 forbids tie-breaking on
 /// wall-clock time because GPS time can be spoofed, which would hand claim races to
-/// an attacker. M0 has nothing to tie-break yet; the point is that a wall-clock
-/// dependency cannot be introduced later by accident, because there is no clock to
-/// reach for.
+/// an attacker. Time enters only as this parameter to [`step`].
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct LogicalTime(pub u64);
 
-/// The M0 placeholder message. Becomes `Entry` (`DESIGN.md` §3) at M2, when
-/// nodes broadcast entries rather than tokens.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
-pub struct Payload {
-    /// Node that first emitted this token.
-    pub origin: NodeId,
-    /// Per-origin counter, so a token is identifiable in the trace.
-    pub seq: u64,
-    /// Echo count so far; the message dies at `MAX_HOPS`.
-    pub hops: u8,
+/// What a message carries (`docs/spec-m2.md` §2).
+///
+/// Replaces M0/M1's `Payload` token: nodes now broadcast real entries and
+/// exchange version vectors rather than echoing an opaque counter. Not
+/// `Copy` — an `Entry` owns a signature, a `VersionVector` owns a
+/// `BTreeMap` — so `Event`/`Effect` lose `Copy` along with it.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Envelope {
+    /// A signed, causally-dependent record (`wire::Entry`).
+    Entry(wire::Entry),
+    /// An anti-entropy advertisement: the sender's own version vector, so
+    /// the receiver can compute what the sender is missing and push it
+    /// back (`docs/spec-m2.md` §6).
+    AntiEntropy(VersionVector),
 }
 
 /// Something that happened *to* a node. The only input to [`step`].
 ///
-/// Per `DESIGN.md` §11.4, no variant is added before a test exercises it. Both of
-/// these are exercised below. `AntiEntropy` arrives at M2.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// Per `DESIGN.md` §11.4, no variant is added before a test exercises it.
+/// M2 dispatches anti-entropy through [`Envelope`] rather than adding a
+/// third `Event` variant (`docs/spec-m2.md` §2) — the shape here is
+/// unchanged from M0/M1, only `Envelope` replaces `Payload`.
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Event {
     /// The clock advanced. Carries no data — `now` is a separate parameter.
     Tick,
     /// A message arrived from `from`.
-    Recv { from: NodeId, payload: Payload },
+    Recv { from: NodeId, payload: Envelope },
 }
 
 /// Something a node wants the outside world to do. The only output of [`step`].
 ///
 /// The core never performs an effect; it describes one and hands it back. This is
 /// what keeps the crate sans-I/O and what makes replay possible.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Effect {
-    Send { to: NodeId, payload: Payload },
+    Send { to: NodeId, payload: Envelope },
+}
+
+/// An entry received but not yet applied: its causal dependencies are not
+/// all delivered yet (`docs/spec-m2.md` §5).
+#[derive(Clone, PartialEq, Eq, Debug)]
+struct BufferedEntry {
+    /// The tick at which this node first saw the entry — used only to pick
+    /// an eviction order (§5); never compared across nodes, never used as a
+    /// causal or wall-clock timestamp.
+    inserted_at: u64,
+    entry: wire::Entry,
 }
 
 /// Everything a node knows.
 ///
-/// Grows into the per-node log, version vector and CRDTs over M2–M5 (M1's
-/// [`log::Log`] lives beside it until the simulator needs them together). It
-/// must stay `Clone`, because [`step`] is pure — see the note on the
-/// signature below.
+/// `docs/spec-m2.md` §7. Grows further at M3-M5 (CRDTs, escrow). Must stay
+/// `Clone` (and, for the tests below, `PartialEq`), because [`step`] is
+/// pure — see the note on the signature below.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct State {
     /// This node's own identity.
-    pub me: NodeId,
-    /// The mission roster, held sorted ascending. Iteration order is part of the
-    /// determinism contract (`docs/spec.md` §6, rule R4), so this invariant matters.
-    roster: Vec<NodeId>,
-    /// Emit a beacon when `now % beacon_period == 0`. Zero disables beacons.
-    beacon_period: u64,
-    /// Messages received. M0's only observable behaviour.
+    me: NodeId,
+    /// Membership, keys, mission id and epoch — fixed for Phase 1.
+    roster: Roster,
+    /// `roster`'s members excluding `me`, cached ascending by `NodeId`
+    /// (rule R4, `docs/spec.md` §6) so `step` never has to recompute it.
+    members: Vec<NodeId>,
+    /// Emit a new entry when `now % entry_period == 0`. Zero disables it.
+    entry_period: u64,
+    /// Advertise this node's version vector when `now % anti_entropy_period
+    /// == 0`. Zero disables it.
+    anti_entropy_period: u64,
+    /// Messages received. Observable via the `Final` trace record.
     pub recv_count: u64,
     /// Effects emitted.
     pub sent_count: u64,
-    /// Next value for `Payload::seq`.
-    next_seq: u64,
+    /// This node's own signed, hash-linked chain.
+    log: log::Log,
+    /// Entries received from other nodes, verified, ascending by seq
+    /// (Vec index == seq, guaranteed by causal delivery's contiguity).
+    origins: BTreeMap<NodeId, Vec<VerifiedEntry>>,
+    /// This node's causal version vector: for every node, the highest seq
+    /// applied — including its own (`docs/spec-m2.md` §3, self-inclusive).
+    causal_vv: VersionVector,
+    /// Entries whose causal dependencies are not yet satisfied, keyed
+    /// `(origin, seq)`. Bounded; oldest dropped on overflow
+    /// (`docs/spec-m2.md` §5).
+    buffer: BTreeMap<(NodeId, u64), BufferedEntry>,
+    buffer_cap: usize,
 }
 
 impl State {
     /// Creates a node's initial state.
     ///
-    /// `roster` is sorted here rather than trusted, because ascending-by-`NodeId`
-    /// iteration is a determinism rule and a caller-supplied order would silently
-    /// break it.
-    ///
     /// # Panics
     ///
-    /// If `me` is not in `roster`. A node absent from its own mission roster is a
-    /// configuration error, and it is one that would otherwise stay invisible:
-    /// the node would run, send and receive normally, while every peer treated it
-    /// as a non-member.
-    pub fn new(me: NodeId, roster: &[NodeId], beacon_period: u64) -> Self {
+    /// If `me` is not a member of `roster`, or if `buffer_cap` is zero. A
+    /// node absent from its own mission roster is a configuration error
+    /// that would otherwise stay invisible: the node would run, verify
+    /// entries against a roster it isn't in, and every peer would silently
+    /// reject anything it sent. A zero-capacity buffer is likewise a
+    /// configuration error: every structure in this system has a stated,
+    /// usable bound (`DESIGN.md` §7).
+    pub fn new(
+        me: NodeId,
+        roster: Roster,
+        key: SigningKey,
+        log_cap: usize,
+        buffer_cap: usize,
+        entry_period: u64,
+        anti_entropy_period: u64,
+    ) -> Self {
         assert!(
-            roster.contains(&me),
+            roster.key(me).is_some(),
             "node must be a member of its own roster"
         );
-        let mut roster: Vec<NodeId> = roster.to_vec();
-        roster.sort_unstable();
-        roster.dedup();
-        Self {
+        assert!(buffer_cap >= 1, "buffer_cap must be at least 1");
+        let members: Vec<NodeId> = roster.members().filter(|&n| n != me).collect();
+        State {
             me,
+            log: log::Log::new(me, key, log_cap),
             roster,
-            beacon_period,
+            members,
+            entry_period,
+            anti_entropy_period,
             recv_count: 0,
             sent_count: 0,
-            next_seq: 0,
+            origins: BTreeMap::new(),
+            causal_vv: VersionVector::new(),
+            buffer: BTreeMap::new(),
+            buffer_cap,
         }
     }
 
-    /// The mission roster, ascending by `NodeId`.
-    pub fn roster(&self) -> &[NodeId] {
-        &self.roster
+    /// This node's own signed chain.
+    pub fn log(&self) -> &log::Log {
+        &self.log
+    }
+
+    /// Entries received from other nodes, keyed by author.
+    pub fn origins(&self) -> &BTreeMap<NodeId, Vec<VerifiedEntry>> {
+        &self.origins
+    }
+
+    /// This node's causal version vector.
+    pub fn causal_vv(&self) -> &VersionVector {
+        &self.causal_vv
+    }
+
+    /// Keys currently held in the causal buffer, in no particular order
+    /// beyond `BTreeMap`'s own (ascending by `(origin, seq)`).
+    pub fn buffer_keys(&self) -> impl Iterator<Item = (NodeId, u64)> + '_ {
+        self.buffer.keys().copied()
+    }
+
+    /// Every entry this node has applied — its own log plus everything
+    /// received — ascending by author then by seq (`docs/spec-m2.md` §7).
+    pub fn entries(&self) -> Vec<&wire::Entry> {
+        let mut out = Vec::new();
+        for node in self.roster.members() {
+            if node == self.me {
+                out.extend(self.log.entries().iter());
+            } else if let Some(v) = self.origins.get(&node) {
+                out.extend(v.iter().map(VerifiedEntry::entry));
+            }
+        }
+        out
+    }
+}
+
+/// The chain-hash a node would expect as `prev` on the next entry it applies
+/// from `origin`: the last one it already holds, or `Hash::ZERO` if none.
+fn expected_prev(state: &State, origin: NodeId) -> Hash {
+    state
+        .origins
+        .get(&origin)
+        .and_then(|v| v.last())
+        .map_or(Hash::ZERO, |v| v.entry().chain_hash())
+}
+
+/// `true` if `state` has already applied `(node, seq)` or something newer
+/// from `node` — the duplicate/already-known branch of causal delivery
+/// (`docs/spec-m2.md` §4).
+fn already_known(state: &State, node: NodeId, seq: u64) -> bool {
+    state.causal_vv.highest(node).is_some_and(|k| k >= seq)
+}
+
+/// Verifies and applies an entry whose `deps` are already satisfied.
+/// Returns whether it was applied. A verification failure is dropped
+/// silently — defensive only; the honest M2 simulator never triggers it
+/// (`docs/spec.md` §9).
+fn attempt_apply(state: &mut State, entry: wire::Entry) -> bool {
+    let prev = expected_prev(state, entry.node);
+    let expected_seq = state.causal_vv.highest(entry.node).map_or(0, |s| s + 1);
+    match log::verify_next(&state.roster, 0, expected_seq, prev, &entry) {
+        Ok(verified) => {
+            state.causal_vv.bump(entry.node, entry.seq);
+            state.origins.entry(entry.node).or_default().push(verified);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+/// Rescans the causal buffer to a fixed point: repeatedly applies any
+/// buffered entry whose `deps` are now satisfied, restarting after each
+/// success (an apply can unblock others), until one full pass finds nothing
+/// more (`docs/spec-m2.md` §4).
+fn drain_buffer(state: &mut State) {
+    loop {
+        let ready = state
+            .buffer
+            .iter()
+            .find(|(_, b)| b.entry.deps.le(&state.causal_vv))
+            .map(|(&k, _)| k);
+        let Some(key) = ready else { break };
+        let buffered = state.buffer.remove(&key).expect("key found above");
+        attempt_apply(state, buffered.entry);
+    }
+}
+
+/// Inserts an unsatisfied entry into the bounded causal buffer, evicting the
+/// oldest — smallest `(inserted_at, origin, seq)` — entry if full
+/// (`docs/spec-m2.md` §5). A re-arriving entry for a key already buffered is
+/// a no-op: the existing copy (and its `inserted_at`) is kept.
+fn buffer_insert(state: &mut State, key: (NodeId, u64), now: u64, entry: wire::Entry) {
+    if state.buffer.contains_key(&key) {
+        return;
+    }
+    if state.buffer.len() == state.buffer_cap {
+        let evict = state
+            .buffer
+            .iter()
+            .map(|(&(origin, seq), b)| (b.inserted_at, origin, seq))
+            .min()
+            .map(|(_, origin, seq)| (origin, seq))
+            .expect("buffer_cap >= 1 and len == cap implies non-empty");
+        state.buffer.remove(&evict);
+    }
+    state.buffer.insert(
+        key,
+        BufferedEntry {
+            inserted_at: now,
+            entry,
+        },
+    );
+}
+
+/// The entry this node holds at `(origin, seq)`, if any — used to answer an
+/// anti-entropy request (`docs/spec-m2.md` §6).
+fn entry_at(state: &State, origin: NodeId, seq: u64) -> Option<&wire::Entry> {
+    if origin == state.me {
+        state.log.entries().get(seq as usize)
+    } else {
+        state
+            .origins
+            .get(&origin)
+            .and_then(|v| v.get(seq as usize))
+            .map(VerifiedEntry::entry)
     }
 }
 
@@ -172,35 +334,70 @@ pub fn step(state: &State, ev: Event, now: LogicalTime) -> (State, Vec<Effect>) 
     match ev {
         Event::Recv { from, payload } => {
             next.recv_count += 1;
-            // Echo it back, one hop older, until the token expires.
-            if payload.hops < MAX_HOPS {
-                effects.push(Effect::Send {
-                    to: from,
-                    payload: Payload {
-                        hops: payload.hops + 1,
-                        ..payload
-                    },
-                });
+            match payload {
+                Envelope::Entry(entry) => {
+                    if already_known(&next, entry.node, entry.seq) {
+                        // Duplicate or already superseded — honest re-delivery
+                        // (e.g. via anti-entropy) is expected traffic, not an
+                        // error (`docs/spec-m2.md` §4).
+                    } else if entry.deps.le(&next.causal_vv) {
+                        if attempt_apply(&mut next, entry) {
+                            drain_buffer(&mut next);
+                        }
+                    } else {
+                        let key = (entry.node, entry.seq);
+                        buffer_insert(&mut next, key, now.0, entry);
+                    }
+                }
+                Envelope::AntiEntropy(their_vv) => {
+                    // Ascending by origin (R4), then ascending by seq within
+                    // each origin — advertise-then-push-reply, one round
+                    // trip, no separate request envelope (`docs/spec-m2.md`
+                    // §6).
+                    for (origin, mine) in next.causal_vv.iter() {
+                        let start = their_vv.highest(origin).map_or(0, |s| s + 1);
+                        for seq in start..=mine {
+                            if let Some(e) = entry_at(&next, origin, seq) {
+                                effects.push(Effect::Send {
+                                    to: from,
+                                    payload: Envelope::Entry(e.clone()),
+                                });
+                            }
+                        }
+                    }
+                }
             }
         }
         Event::Tick => {
-            // A silent network is trivially deterministic and would satisfy M0's
-            // acceptance criterion while proving nothing. Beacons keep the channel
-            // busy so that loss, delay and partition are actually exercised.
-            if next.beacon_period != 0 && now.0.is_multiple_of(next.beacon_period) {
-                for &peer in next.roster.iter() {
-                    if peer == next.me {
-                        continue;
+            // Fixed order within the tick: a node's own entry (if due) is
+            // created and broadcast before its anti-entropy advertisement
+            // (if also due this tick) — normative, `docs/spec-m2.md` §6.
+            if next.entry_period != 0 && now.0.is_multiple_of(next.entry_period) {
+                let deps = next.causal_vv.clone();
+                let body = Body::TaskClaim {
+                    task: next.log.next_seq(),
+                    priority: 1,
+                };
+                if let Ok(appended) = next.log.append(body, deps) {
+                    let seq = appended.seq;
+                    let entry = appended.clone();
+                    next.causal_vv.bump(next.me, seq);
+                    for &peer in &next.members {
+                        effects.push(Effect::Send {
+                            to: peer,
+                            payload: Envelope::Entry(entry.clone()),
+                        });
                     }
+                }
+                // A full log is a silent no-op: graceful degradation, not a
+                // crash. Not exercised at M2's default `log_cap`.
+            }
+            if next.anti_entropy_period != 0 && now.0.is_multiple_of(next.anti_entropy_period) {
+                for &peer in &next.members {
                     effects.push(Effect::Send {
                         to: peer,
-                        payload: Payload {
-                            origin: next.me,
-                            seq: next.next_seq,
-                            hops: 0,
-                        },
+                        payload: Envelope::AntiEntropy(next.causal_vv.clone()),
                     });
-                    next.next_seq += 1;
                 }
             }
         }
@@ -214,90 +411,212 @@ pub fn step(state: &State, ev: Event, now: LogicalTime) -> (State, Vec<Effect>) 
 mod tests {
     use super::*;
 
-    fn roster3() -> [NodeId; 3] {
-        [NodeId(0), NodeId(1), NodeId(2)]
+    fn key(seed: u8) -> SigningKey {
+        let mut bytes = [0u8; 32];
+        bytes[0] = seed;
+        SigningKey::from_bytes(&bytes)
     }
 
-    fn token(origin: u8, hops: u8) -> Payload {
-        Payload {
-            origin: NodeId(origin),
-            seq: 0,
-            hops,
+    /// A 3-node roster (`A=0, B=1, C=2`) and the keys behind it.
+    fn roster3() -> (Roster, [SigningKey; 3]) {
+        let keys = [key(1), key(2), key(3)];
+        let mut m = alloc::collections::BTreeMap::new();
+        for (i, k) in keys.iter().enumerate() {
+            m.insert(NodeId(i as u8), k.verifying_key());
         }
+        (
+            Roster::new(wire::PHASE1_MISSION_ID, wire::PHASE1_EPOCH, m),
+            keys,
+        )
     }
 
-    #[test]
-    fn roster_is_sorted_and_deduped_regardless_of_input_order() {
-        let s = State::new(NodeId(1), &[NodeId(2), NodeId(0), NodeId(1), NodeId(2)], 10);
-        assert_eq!(s.roster(), &[NodeId(0), NodeId(1), NodeId(2)]);
+    fn state(me: NodeId, roster: &Roster, k: &SigningKey, entry_period: u64) -> State {
+        State::new(me, roster.clone(), k.clone(), 64, 8, entry_period, 0)
     }
 
     #[test]
     #[should_panic(expected = "own roster")]
     fn node_missing_from_its_own_roster_is_rejected() {
-        State::new(NodeId(1), &[NodeId(0), NodeId(2)], 10);
+        let (roster, keys) = roster3();
+        let mut m = alloc::collections::BTreeMap::new();
+        m.insert(NodeId(0), keys[0].verifying_key());
+        m.insert(NodeId(1), keys[1].verifying_key());
+        let partial = Roster::new(roster.mission_id, roster.epoch, m);
+        State::new(NodeId(9), partial, key(9), 64, 8, 10, 0);
     }
 
     #[test]
-    fn recv_counts_and_echoes_back_to_sender() {
-        let s = State::new(NodeId(1), &roster3(), 10);
-        let (s2, fx) = step(
-            &s,
-            Event::Recv {
-                from: NodeId(0),
-                payload: token(0, 0),
-            },
-            LogicalTime(1),
-        );
-
-        assert_eq!(s2.recv_count, 1);
-        assert_eq!(
-            fx,
-            [Effect::Send {
-                to: NodeId(0),
-                payload: token(0, 1)
-            }]
-        );
+    #[should_panic(expected = "buffer_cap must be at least 1")]
+    fn zero_buffer_cap_is_rejected() {
+        let (roster, keys) = roster3();
+        State::new(NodeId(0), roster, keys[0].clone(), 64, 0, 10, 0);
     }
 
     #[test]
-    fn echo_dies_at_max_hops() {
-        let s = State::new(NodeId(1), &roster3(), 10);
-        let (s2, fx) = step(
-            &s,
-            Event::Recv {
-                from: NodeId(0),
-                payload: token(0, MAX_HOPS),
-            },
-            LogicalTime(1),
-        );
-
-        // Counted, but not echoed: this is what bounds messages in flight.
-        assert_eq!(s2.recv_count, 1);
-        assert!(fx.is_empty());
-    }
-
-    #[test]
-    fn beacon_fires_on_period_to_every_peer_ascending() {
-        let s = State::new(NodeId(1), &roster3(), 10);
+    fn entry_created_and_broadcast_on_period() {
+        let (roster, keys) = roster3();
+        let s = state(NodeId(0), &roster, &keys[0], 10);
         let (s2, fx) = step(&s, Event::Tick, LogicalTime(10));
 
+        assert_eq!(s2.log().len(), 1);
+        assert_eq!(s2.causal_vv().highest(NodeId(0)), Some(0));
         let dests: Vec<NodeId> = fx.iter().map(|Effect::Send { to, .. }| *to).collect();
-        // Never to itself, and in ascending NodeId order (contract rule R4).
-        assert_eq!(dests, [NodeId(0), NodeId(2)]);
-        assert_eq!(s2.sent_count, 2);
+        // Never to itself, ascending NodeId (rule R4).
+        assert_eq!(dests, [NodeId(1), NodeId(2)]);
+        assert!(fx
+            .iter()
+            .all(|Effect::Send { payload, .. }| matches!(payload, Envelope::Entry(_))));
     }
 
     #[test]
-    fn beacon_is_silent_off_period() {
-        let s = State::new(NodeId(1), &roster3(), 10);
-        let (_, fx) = step(&s, Event::Tick, LogicalTime(11));
+    fn entry_creation_is_silent_off_period() {
+        let (roster, keys) = roster3();
+        let s = state(NodeId(0), &roster, &keys[0], 10);
+        let (s2, fx) = step(&s, Event::Tick, LogicalTime(11));
         assert!(fx.is_empty());
+        assert_eq!(s2.log().len(), 0);
+    }
+
+    #[test]
+    fn an_entry_with_unsatisfied_deps_is_buffered_not_applied() {
+        let (roster, keys) = roster3();
+        let a = state(NodeId(0), &roster, &keys[0], 10);
+        let (a1, fx) = step(&a, Event::Tick, LogicalTime(10));
+        assert_eq!(fx.len(), 2);
+        let Effect::Send { payload, .. } = fx[0].clone();
+        let Envelope::Entry(first) = payload else {
+            panic!("expected an entry")
+        };
+
+        // C never saw A's genesis entry; build A's *second* entry directly so
+        // its `deps` names A's seq 0, which C does not have.
+        let mut a2_log = a1.log().clone();
+        let second = a2_log
+            .append(
+                Body::TaskClaim {
+                    task: 1,
+                    priority: 1,
+                },
+                {
+                    let mut vv = VersionVector::new();
+                    vv.bump(NodeId(0), 0);
+                    vv
+                },
+            )
+            .unwrap()
+            .clone();
+        let _ = first; // the genesis entry itself is not delivered to C below
+
+        let c = state(NodeId(2), &roster, &keys[2], 0);
+        let (c1, fx) = step(
+            &c,
+            Event::Recv {
+                from: NodeId(0),
+                payload: Envelope::Entry(second),
+            },
+            LogicalTime(11),
+        );
+        assert!(fx.is_empty());
+        assert_eq!(c1.causal_vv().highest(NodeId(0)), None, "not applied");
+        assert_eq!(c1.buffer_keys().count(), 1, "buffered instead");
+    }
+
+    #[test]
+    fn a_satisfied_entry_applies_and_advances_causal_vv() {
+        let (roster, keys) = roster3();
+        let a = state(NodeId(0), &roster, &keys[0], 10);
+        let (a1, fx) = step(&a, Event::Tick, LogicalTime(10));
+        let Effect::Send { payload, .. } = fx[0].clone();
+        let Envelope::Entry(first) = payload else {
+            panic!("expected an entry")
+        };
+        let _ = a1;
+
+        let c = state(NodeId(2), &roster, &keys[2], 0);
+        let (c1, fx) = step(
+            &c,
+            Event::Recv {
+                from: NodeId(0),
+                payload: Envelope::Entry(first),
+            },
+            LogicalTime(11),
+        );
+        assert!(fx.is_empty());
+        assert_eq!(c1.causal_vv().highest(NodeId(0)), Some(0));
+        assert_eq!(c1.entries().len(), 1);
+        assert!(c1.buffer_keys().count() == 0);
+    }
+
+    #[test]
+    fn anti_entropy_reply_carries_exactly_the_missing_entries() {
+        let (roster, keys) = roster3();
+        let a = state(NodeId(0), &roster, &keys[0], 10);
+        let (a1, _) = step(&a, Event::Tick, LogicalTime(10));
+        let (a2, _) = step(&a1, Event::Tick, LogicalTime(20));
+        assert_eq!(a2.log().len(), 2);
+
+        // B advertises an empty VV: it has nothing from A.
+        let b = state(NodeId(1), &roster, &keys[1], 0);
+        let (_, fx) = step(
+            &a2,
+            Event::Recv {
+                from: NodeId(1),
+                payload: Envelope::AntiEntropy(b.causal_vv().clone()),
+            },
+            LogicalTime(21),
+        );
+
+        let seqs: Vec<u64> = fx
+            .iter()
+            .map(|Effect::Send { payload, .. }| match payload {
+                Envelope::Entry(e) => e.seq,
+                Envelope::AntiEntropy(_) => panic!("expected entries only"),
+            })
+            .collect();
+        assert_eq!(seqs, [0, 1]);
+        assert!(fx.iter().all(|Effect::Send { to, .. }| *to == NodeId(1)));
+    }
+
+    #[test]
+    fn a_duplicate_delivery_is_a_no_op() {
+        let (roster, keys) = roster3();
+        let a = state(NodeId(0), &roster, &keys[0], 10);
+        let (a1, fx) = step(&a, Event::Tick, LogicalTime(10));
+        let Effect::Send { payload, .. } = fx[0].clone();
+        let Envelope::Entry(first) = payload else {
+            panic!("expected an entry")
+        };
+        let _ = a1;
+
+        let c = state(NodeId(2), &roster, &keys[2], 0);
+        let (c1, _) = step(
+            &c,
+            Event::Recv {
+                from: NodeId(0),
+                payload: Envelope::Entry(first.clone()),
+            },
+            LogicalTime(11),
+        );
+        let (c2, fx) = step(
+            &c1,
+            Event::Recv {
+                from: NodeId(0),
+                payload: Envelope::Entry(first),
+            },
+            LogicalTime(12),
+        );
+        assert!(fx.is_empty());
+        // `recv_count` legitimately differs (a duplicate is still received);
+        // everything the entry could have changed must not.
+        assert_eq!(c1.causal_vv(), c2.causal_vv());
+        assert_eq!(c1.entries(), c2.entries());
+        assert_eq!(c1.buffer_keys().count(), c2.buffer_keys().count());
     }
 
     #[test]
     fn step_is_pure_and_reproducible() {
-        let s = State::new(NodeId(1), &roster3(), 10);
+        let (roster, keys) = roster3();
+        let s = state(NodeId(0), &roster, &keys[0], 10);
         let (a, fx_a) = step(&s, Event::Tick, LogicalTime(10));
         let (b, fx_b) = step(&s, Event::Tick, LogicalTime(10));
 

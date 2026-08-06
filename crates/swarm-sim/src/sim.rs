@@ -10,7 +10,9 @@
 //! an implementation detail: determinism is not a consequence of this code being
 //! single-threaded, it is a consequence of this order being fixed and total.
 
-use std::collections::BTreeMap;
+use ed25519_dalek::SigningKey;
+use std::collections::{BTreeMap, BTreeSet};
+use swarm_core::wire::{Roster, PHASE1_EPOCH, PHASE1_MISSION_ID};
 use swarm_core::{step, Effect, Event, LogicalTime, NodeId, State};
 
 use crate::net::{Msg, Network};
@@ -31,7 +33,16 @@ pub struct SimConfig {
     pub delay_min: u64,
     pub delay_max: u64,
     pub queue_cap: usize,
-    pub beacon_period: u64,
+    /// A node creates and broadcasts a new entry when `tick % entry_period
+    /// == 0` (`docs/spec-m2.md` §6). Replaces M0/M1's `beacon_period`.
+    pub entry_period: u64,
+    /// A node advertises its version vector when `tick % anti_entropy_period
+    /// == 0` (`docs/spec-m2.md` §6).
+    pub anti_entropy_period: u64,
+    /// Bound on each node's own hash chain (`docs/spec-m1.md` §6).
+    pub log_cap: usize,
+    /// Bound on each node's causal buffer (`docs/spec-m2.md` §5).
+    pub buffer_cap: usize,
     /// Scripted partition changes, applied at the top of the named tick. M5's
     /// randomised churn will be a seeded *generator of this same script*; the loop
     /// below does not change.
@@ -48,7 +59,10 @@ impl Default for SimConfig {
             delay_min: 1,
             delay_max: 3,
             queue_cap: 64,
-            beacon_period: 10,
+            entry_period: 10,
+            anti_entropy_period: 15,
+            log_cap: 1000,
+            buffer_cap: 32,
             partitions: Vec::new(),
         }
     }
@@ -60,8 +74,35 @@ impl SimConfig {
     }
 }
 
+/// A deterministic per-node signing key, derived from `NodeId` alone — never
+/// drawn from `SimRng`, so it cannot perturb rule R2's draw-count contract
+/// (`docs/spec.md` §6). Same convention as `swarm-core`'s own test keys.
+fn node_key(node: NodeId) -> SigningKey {
+    let mut bytes = [0u8; 32];
+    bytes[0] = node.0.wrapping_add(1);
+    SigningKey::from_bytes(&bytes)
+}
+
+/// The shared mission roster: every node's identity and verifying key,
+/// fixed for the whole run (`DESIGN.md` §7).
+fn build_roster(nodes: &[NodeId]) -> Roster {
+    let keys = nodes
+        .iter()
+        .map(|&n| (n, node_key(n).verifying_key()))
+        .collect();
+    Roster::new(PHASE1_MISSION_ID, PHASE1_EPOCH, keys)
+}
+
 /// Runs a simulation to completion and returns its trace.
 pub fn run(cfg: &SimConfig) -> Trace {
+    run_with_states(cfg).0
+}
+
+/// Runs a simulation to completion and returns its trace *and* every node's
+/// final `State` — the M2 acceptance test and the `converge` example need to
+/// inspect each node's entries and version vector directly, not just the
+/// trace (`docs/spec-m2.md` §7).
+pub fn run_with_states(cfg: &SimConfig) -> (Trace, BTreeMap<NodeId, State>) {
     // R1. Without this an effect produced during tick N could be delivered during
     // tick N, and the resulting order would depend on iteration sequence rather
     // than on any stated rule.
@@ -79,15 +120,29 @@ pub fn run(cfg: &SimConfig) -> Trace {
     );
     assert!(cfg.nodes >= 1, "need at least one node");
 
-    let roster = cfg.roster();
-    let mut states: BTreeMap<NodeId, State> = roster
+    let roster_ids = cfg.roster();
+    let roster = build_roster(&roster_ids);
+    let mut states: BTreeMap<NodeId, State> = roster_ids
         .iter()
-        .map(|&n| (n, State::new(n, &roster, cfg.beacon_period)))
+        .map(|&n| {
+            (
+                n,
+                State::new(
+                    n,
+                    roster.clone(),
+                    node_key(n),
+                    cfg.log_cap,
+                    cfg.buffer_cap,
+                    cfg.entry_period,
+                    cfg.anti_entropy_period,
+                ),
+            )
+        })
         .collect();
 
     let mut net = Network::new(cfg.queue_cap);
     let mut rng = SimRng::new(cfg.seed);
-    let mut part = Partition::connected(&roster);
+    let mut part = Partition::connected(&roster_ids);
     let mut trace = Trace::default();
 
     for tick in 1..=cfg.ticks {
@@ -106,7 +161,7 @@ pub fn run(cfg: &SimConfig) -> Trace {
         }
 
         // 3. DELIVER phase — destinations ascending by NodeId (rule R4).
-        for &dest in &roster {
+        for &dest in &roster_ids {
             for msg in net.take_due(dest, tick) {
                 // Reachability is checked here, at delivery, not at send. A message
                 // already in the air when the link drops does not arrive.
@@ -122,7 +177,7 @@ pub fn run(cfg: &SimConfig) -> Trace {
                     at: tick,
                     from: msg.from,
                     to: dest,
-                    payload: msg.payload,
+                    payload: msg.payload.clone(),
                 });
 
                 let ev = Event::Recv {
@@ -130,20 +185,22 @@ pub fn run(cfg: &SimConfig) -> Trace {
                     payload: msg.payload,
                 };
                 let (next, fx) = step(&states[&dest], ev, now);
+                trace_state_diff(&mut trace, dest, tick, &states[&dest], &next);
                 states.insert(dest, next);
-                emit(&mut trace, &mut net, &mut rng, cfg, dest, tick, &fx);
+                emit(&mut trace, &mut net, &mut rng, cfg, dest, tick, fx);
             }
         }
 
         // 4. TICK phase — nodes ascending by NodeId (rule R4).
-        for &node in &roster {
+        for &node in &roster_ids {
             let (next, fx) = step(&states[&node], Event::Tick, now);
+            trace_state_diff(&mut trace, node, tick, &states[&node], &next);
             states.insert(node, next);
-            emit(&mut trace, &mut net, &mut rng, cfg, node, tick, &fx);
+            emit(&mut trace, &mut net, &mut rng, cfg, node, tick, fx);
         }
     }
 
-    for &n in &roster {
+    for &n in &roster_ids {
         let s = &states[&n];
         trace.push(TraceRecord::Final {
             node: n,
@@ -152,7 +209,55 @@ pub fn run(cfg: &SimConfig) -> Trace {
         });
     }
 
-    trace
+    (trace, states)
+}
+
+/// Derives `Apply`/`Buffer`/`DropCausalOverflow` trace records by diffing a
+/// node's `State` before and after one `step` call (`docs/spec-m2.md` §7).
+/// `step` itself stays pure and returns only `Effect`s — this is bookkeeping
+/// the simulator does on the side, not a change to the core's contract
+/// (`docs/spec.md` §3.2).
+fn trace_state_diff(trace: &mut Trace, node: NodeId, tick: u64, old: &State, new: &State) {
+    // Every entry newly reflected in `causal_vv`, ascending by origin (R4)
+    // then by seq — covers direct application and buffer-drain alike, since
+    // both advance `causal_vv` the same way.
+    let mut applied: BTreeSet<(NodeId, u64)> = BTreeSet::new();
+    for (origin, new_highest) in new.causal_vv().iter() {
+        let start = old.causal_vv().highest(origin).map_or(0, |v| v + 1);
+        for seq in start..=new_highest {
+            trace.push(TraceRecord::Apply {
+                at: tick,
+                node,
+                origin,
+                seq,
+            });
+            applied.insert((origin, seq));
+        }
+    }
+
+    let old_buf: BTreeSet<(NodeId, u64)> = old.buffer_keys().collect();
+    let new_buf: BTreeSet<(NodeId, u64)> = new.buffer_keys().collect();
+
+    for &(origin, seq) in new_buf.difference(&old_buf) {
+        trace.push(TraceRecord::Buffer {
+            at: tick,
+            node,
+            origin,
+            seq,
+        });
+    }
+    // A key that left the buffer without being applied this tick was
+    // evicted for space, not delivered (`docs/spec-m2.md` §5).
+    for &(origin, seq) in old_buf.difference(&new_buf) {
+        if !applied.contains(&(origin, seq)) {
+            trace.push(TraceRecord::DropCausalOverflow {
+                at: tick,
+                node,
+                origin,
+                seq,
+            });
+        }
+    }
 }
 
 /// Hands the core's effects to the channel.
@@ -163,15 +268,15 @@ fn emit(
     cfg: &SimConfig,
     from: NodeId,
     tick: u64,
-    effects: &[Effect],
+    effects: Vec<Effect>,
 ) {
     for e in effects {
-        let Effect::Send { to, payload } = *e;
+        let Effect::Send { to, payload } = e;
         trace.push(TraceRecord::Send {
             at: tick,
             from,
             to,
-            payload,
+            payload: payload.clone(),
         });
 
         // R2: both values are drawn for every effect, in this order, even when the

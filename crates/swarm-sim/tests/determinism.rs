@@ -26,7 +26,10 @@ fn busy(seed: u64) -> SimConfig {
         delay_min: 1,
         delay_max: 5,
         queue_cap: 64,
-        beacon_period: 10,
+        entry_period: 10,
+        anti_entropy_period: 0,
+        log_cap: 1000,
+        buffer_cap: 32,
         partitions: Vec::new(),
     }
 }
@@ -152,7 +155,10 @@ fn bounded_queue_drops_oldest_under_pressure() {
     let trace = run(&SimConfig {
         loss_permille: 0,
         queue_cap: 2,
-        beacon_period: 1,
+        entry_period: 1,
+        anti_entropy_period: 0,
+        log_cap: 1000,
+        buffer_cap: 32,
         ticks: 60,
         ..busy(5)
     });
@@ -167,7 +173,10 @@ fn bounded_queue_drops_oldest_under_pressure() {
         run(&SimConfig {
             loss_permille: 0,
             queue_cap: 2,
-            beacon_period: 1,
+            entry_period: 1,
+            anti_entropy_period: 0,
+            log_cap: 1000,
+            buffer_cap: 32,
             ticks: 60,
             ..busy(5)
         })
@@ -191,7 +200,10 @@ fn trace_observes_the_model_not_just_the_seed() {
             ..base.clone()
         },
         SimConfig {
-            beacon_period: 5,
+            entry_period: 5,
+            anti_entropy_period: 0,
+            log_cap: 1000,
+            buffer_cap: 32,
             ..base.clone()
         },
         SimConfig {

@@ -12,6 +12,7 @@
 use std::collections::BTreeMap;
 
 use ed25519_dalek::{Signature, SigningKey};
+use swarm_core::causal::VersionVector;
 use swarm_core::log::{verify_chain, ChainError, Log, LogError};
 use swarm_core::wire::{Body, Hash, Roster, PHASE1_EPOCH, PHASE1_MISSION_ID};
 use swarm_core::NodeId;
@@ -35,7 +36,7 @@ fn claim(task: u64) -> Body {
 fn chain_of(key: &SigningKey, node: NodeId, len: usize) -> Log {
     let mut log = Log::new(node, key.clone(), len.max(1));
     for i in 0..len {
-        log.append(claim(i as u64)).unwrap();
+        log.append(claim(i as u64), VersionVector::new()).unwrap();
     }
     log
 }
@@ -252,9 +253,12 @@ fn the_log_bound_is_enforced_by_refusal() {
     // docs/spec-m1.md §6: eviction is not safe until the MMR exists, so a
     // full log refuses to grow rather than silently dropping history.
     let mut log = Log::new(NodeId(0), test_key(5), 2);
-    log.append(claim(0)).unwrap();
-    log.append(claim(1)).unwrap();
+    log.append(claim(0), VersionVector::new()).unwrap();
+    log.append(claim(1), VersionVector::new()).unwrap();
 
-    assert_eq!(log.append(claim(2)), Err(LogError::Full));
+    assert_eq!(
+        log.append(claim(2), VersionVector::new()),
+        Err(LogError::Full)
+    );
     assert_eq!(log.len(), 2, "the bound must hold after refusal");
 }

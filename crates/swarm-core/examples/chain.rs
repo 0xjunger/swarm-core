@@ -12,6 +12,7 @@
 use std::collections::BTreeMap;
 
 use ed25519_dalek::SigningKey;
+use swarm_core::causal::VersionVector;
 use swarm_core::log::{verify_chain, Log};
 use swarm_core::wire::{Body, Roster, PHASE1_EPOCH, PHASE1_MISSION_ID};
 use swarm_core::NodeId;
@@ -37,10 +38,13 @@ fn main() {
     // 1. Build.
     let mut log = Log::new(node, key.clone(), len.max(1));
     for i in 0..len {
-        log.append(Body::TaskClaim {
-            task: i as u64,
-            priority: 1,
-        })
+        log.append(
+            Body::TaskClaim {
+                task: i as u64,
+                priority: 1,
+            },
+            VersionVector::new(),
+        )
         .unwrap();
     }
     println!(

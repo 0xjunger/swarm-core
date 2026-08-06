@@ -17,5 +17,5 @@ pub mod sim;
 pub mod trace;
 
 pub use partition::Partition;
-pub use sim::{run, SimConfig};
+pub use sim::{run, run_with_states, SimConfig};
 pub use trace::{Trace, TraceRecord};
