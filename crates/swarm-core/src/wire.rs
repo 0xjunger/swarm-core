@@ -41,19 +41,28 @@ impl Hash {
 
 /// What an entry means.
 ///
-/// Exactly one variant at M1 (`DESIGN.md`, item 3): new variants arrive only
-/// when a test demands them (`DESIGN.md` §11.4), and each arrives with a test.
+/// One variant at M1, two at M3 (`DESIGN.md`, item 3): new variants arrive
+/// only when a test demands them (`DESIGN.md` §11.4), and each arrives with a
+/// test — the golden vector covers both.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Body {
     /// "I claim task `task` with priority `priority`." M3's deterministic
     /// winner rule is `min by (priority, logical_clock, node_id)`
     /// (`DESIGN.md` §4.2); `priority` is encoded from day one so that rule
-    /// needs no format change.
+    /// needs no format change, and `logical_clock` is derived from `deps`
+    /// rather than carried, so it needs none either (`docs/spec-m3.md` §3).
     TaskClaim { task: u64, priority: u8 },
+    /// "I claimed `task`, I am not the winner, I am standing down."
+    ///
+    /// A record, not a CRDT operation: it does **not** remove the author's
+    /// claim from the claim set (`docs/spec-m3.md` §4.1). This is the
+    /// "geri çekilme kaydı" M3's acceptance criterion asks for.
+    Withdraw { task: u64 },
 }
 
 impl Body {
     const TAG_TASK_CLAIM: u8 = 0x00;
+    const TAG_WITHDRAW: u8 = 0x01;
 
     fn encode(&self, out: &mut Vec<u8>) {
         match self {
@@ -61,6 +70,10 @@ impl Body {
                 out.push(Self::TAG_TASK_CLAIM);
                 out.extend_from_slice(&task.to_be_bytes());
                 out.push(*priority);
+            }
+            Body::Withdraw { task } => {
+                out.push(Self::TAG_WITHDRAW);
+                out.extend_from_slice(&task.to_be_bytes());
             }
         }
     }
@@ -295,5 +308,27 @@ mod tests {
         }
         .encode(&mut out);
         assert_eq!(out, [0x00, 0, 0, 0, 0, 0, 0, 0, 7, 1]);
+    }
+
+    #[test]
+    fn withdraw_encodes_tag_and_task() {
+        let mut out = Vec::new();
+        Body::Withdraw { task: 7 }.encode(&mut out);
+        assert_eq!(out, [0x01, 0, 0, 0, 0, 0, 0, 0, 7]);
+    }
+
+    #[test]
+    fn the_two_bodies_never_share_an_encoding() {
+        // Distinct tags are what keep a claim from being read as a withdrawal
+        // under the same signature (`docs/spec-m3.md` §2).
+        let (mut claim, mut withdraw) = (Vec::new(), Vec::new());
+        Body::TaskClaim {
+            task: 7,
+            priority: 0,
+        }
+        .encode(&mut claim);
+        Body::Withdraw { task: 7 }.encode(&mut withdraw);
+        assert_ne!(claim, withdraw);
+        assert_ne!(claim[0], withdraw[0]);
     }
 }

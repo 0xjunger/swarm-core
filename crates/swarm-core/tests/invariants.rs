@@ -221,6 +221,46 @@ fn i3_same_entries_different_arrival_order_converge_to_identical_state() {
     assert_eq!(q_state.buffer_keys().count(), 0, "fully drained");
 }
 
+/// I3 at M3 (`docs/spec-m3.md` §9): "derived state" now means more than the
+/// version vector. Two nodes that saw the same entries must hold an identical
+/// claim CRDT **and** name the same winner for every task — the property
+/// M3's acceptance criterion calls "kimse 'ben kazandım' sanmıyor".
+#[test]
+fn i3_same_entries_different_arrival_order_derive_the_same_claims_and_winner() {
+    let (roster, keys) = m2_roster();
+    let a = NodeId(0);
+    let (p, q) = (NodeId(1), NodeId(2));
+    let [e0, e1, e2] = a_chain(a, &keys[0]);
+
+    let p_state = State::new(p, roster.clone(), keys[1].clone(), 64, 8, 0, 0);
+    let p_state = deliver(&p_state, a, e0.clone(), 1);
+    let p_state = deliver(&p_state, a, e1.clone(), 2);
+    let p_state = deliver(&p_state, a, e2.clone(), 3);
+
+    // Same three entries, reverse order: the first two buffer, then e0's
+    // arrival drains everything in one step.
+    let q_state = State::new(q, roster, keys[2].clone(), 64, 8, 0, 0);
+    let q_state = deliver(&q_state, a, e2, 1);
+    let q_state = deliver(&q_state, a, e1, 2);
+    let q_state = deliver(&q_state, a, e0, 3);
+
+    assert_eq!(
+        p_state.claims(),
+        q_state.claims(),
+        "I3: the derived claim CRDT must not depend on arrival order"
+    );
+
+    // `a_chain` writes claims for tasks 0, 1 and 2, so all three are present
+    // and each has exactly one claimant.
+    let tasks: Vec<u64> = p_state.claims().tasks().collect();
+    assert_eq!(tasks, [0, 1, 2], "the folded chain must be visible");
+    for task in tasks {
+        let winner = p_state.claims().winner(task);
+        assert_eq!(winner, q_state.claims().winner(task), "winners disagree");
+        assert_eq!(winner.map(|w| w.node), Some(a));
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Documented placeholders — not testable at M2, deliberately not stubbed.
 // Each names the milestone whose acceptance criterion activates it

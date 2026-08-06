@@ -8,7 +8,7 @@
 
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use swarm_core::causal::VersionVector;
-use swarm_core::wire::{Body, Hash, UnsignedEntry, PHASE1_EPOCH, PHASE1_MISSION_ID};
+use swarm_core::wire::{Body, Entry, Hash, UnsignedEntry, PHASE1_EPOCH, PHASE1_MISSION_ID};
 use swarm_core::NodeId;
 
 /// The golden key: deterministic, public, test-only. Bytes 0..=31.
@@ -179,4 +179,101 @@ fn golden_vector_with_a_non_empty_version_vector() {
 
     let vk = SigningKey::from_bytes(&GOLDEN_KEY).verifying_key();
     assert!(vk.verify_strict(&e.signing_bytes(), &e.sig).is_ok());
+}
+
+// ---------------------------------------------------------------------------
+// M3: a third golden vector for the `Withdraw` body (`docs/spec-m3.md` §10).
+// Every `Body` variant arrives with a test (`DESIGN.md` §11.4). The two
+// vectors above must stay byte-identical — a new enum variant adds a tag, it
+// never rewrites an existing encoding. If either of them moves, something has
+// silently altered a frozen format.
+// ---------------------------------------------------------------------------
+
+fn golden_entry_withdraw() -> Entry {
+    let key = SigningKey::from_bytes(&GOLDEN_KEY);
+    let mut deps = VersionVector::new();
+    deps.bump(NodeId(0), 2);
+    UnsignedEntry {
+        mission_id: PHASE1_MISSION_ID,
+        epoch: PHASE1_EPOCH,
+        node: NodeId(1),
+        seq: 4,
+        prev: Hash::ZERO,
+        deps,
+        body: Body::Withdraw { task: 7 },
+    }
+    .sign(&key)
+}
+
+/// Computed independently from the spec layout: tag || mission_id || epoch ||
+/// node || seq || prev || deps({0: 2}) || Withdraw{task: 7}. The body segment
+/// is `01` (tag, `docs/spec-m3.md` §2) followed by `0000000000000007` — eight
+/// big-endian bytes and **no priority byte**, which is what distinguishes it
+/// from `TaskClaim`.
+const GOLDEN_SIGNING_HEX_WITHDRAW: &str = "535741524d5f454e5452595f5631\
+    0000000000000000000000000000000000000000000000000000000000000000\
+    00000000\
+    01\
+    0000000000000004\
+    0000000000000000000000000000000000000000000000000000000000000000\
+    0001\
+    00\
+    0000000000000002\
+    01\
+    0000000000000007";
+
+const GOLDEN_ENCODED_HEX_WITHDRAW: &str = "535741524d5f454e5452595f5631\
+    0000000000000000000000000000000000000000000000000000000000000000\
+    00000000\
+    01\
+    0000000000000004\
+    0000000000000000000000000000000000000000000000000000000000000000\
+    0001\
+    00\
+    0000000000000002\
+    01\
+    0000000000000007\
+    6bc5f7d9ea7b1a7970bfd7642c2e5654be761f5bbe7a2a8ffdb49e77d9dc5e1c\
+    3ec4dfc13c2bc9a3aa51377a87f9890c7a4e069462a7ce936bf060da14937207";
+
+#[test]
+fn golden_vector_pins_the_withdraw_body() {
+    let e = golden_entry_withdraw();
+
+    assert_eq!(
+        hex(&e.signing_bytes()),
+        GOLDEN_SIGNING_HEX_WITHDRAW,
+        "the Withdraw encoding changed — if deliberate, update this file and \
+         state the reason in the commit message (DESIGN.md §11.5)"
+    );
+    assert_eq!(hex(&e.encoded()), GOLDEN_ENCODED_HEX_WITHDRAW);
+
+    let vk = SigningKey::from_bytes(&GOLDEN_KEY).verifying_key();
+    assert!(vk.verify_strict(&e.signing_bytes(), &e.sig).is_ok());
+}
+
+/// A claim and a withdrawal naming the same task must never produce the same
+/// signed bytes — otherwise one signature would attest to both
+/// (`docs/spec-m3.md` §2).
+#[test]
+fn a_claim_and_a_withdrawal_for_one_task_sign_different_bytes() {
+    let key = SigningKey::from_bytes(&GOLDEN_KEY);
+    let unsigned = |body| UnsignedEntry {
+        mission_id: PHASE1_MISSION_ID,
+        epoch: PHASE1_EPOCH,
+        node: NodeId(1),
+        seq: 4,
+        prev: Hash::ZERO,
+        deps: VersionVector::new(),
+        body,
+    };
+    let claim = unsigned(Body::TaskClaim {
+        task: 7,
+        priority: 1,
+    })
+    .sign(&key);
+    let withdraw = unsigned(Body::Withdraw { task: 7 }).sign(&key);
+
+    assert_ne!(claim.signing_bytes(), withdraw.signing_bytes());
+    assert_ne!(claim.sig, withdraw.sig);
 }

@@ -8,6 +8,7 @@
 //! library and the library does not know it exists.
 
 use std::io::BufRead;
+use swarm_core::wire::Body;
 use swarm_core::{Envelope, NodeId};
 use swarm_sim::{run, Partition, SimConfig, TraceRecord};
 
@@ -164,7 +165,12 @@ fn main() {
 /// A short human label for what an envelope carries.
 fn envelope_label(e: &Envelope) -> String {
     match e {
-        Envelope::Entry(entry) => format!("entry n{}#{}", entry.node.0, entry.seq),
+        Envelope::Entry(entry) => match entry.body {
+            Body::TaskClaim { task, .. } => {
+                format!("n{}#{} claim t{task}", entry.node.0, entry.seq)
+            }
+            Body::Withdraw { task } => format!("n{}#{} withdraw t{task}", entry.node.0, entry.seq),
+        },
         Envelope::AntiEntropy(vv) => format!("vv sync ({} known)", vv.iter().count()),
     }
 }

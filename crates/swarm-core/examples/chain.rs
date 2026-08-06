@@ -78,7 +78,10 @@ fn main() {
     // 3. Tamper with one byte in the middle, and verify again.
     let mut entries = log.entries().to_vec();
     let original = entries[len / 2].clone();
-    let Body::TaskClaim { task, priority } = entries[len / 2].body;
+    // Claims only in this chain, so the M3 `Withdraw` variant cannot occur.
+    let Body::TaskClaim { task, priority } = entries[len / 2].body else {
+        unreachable!("this demo appends TaskClaim entries only");
+    };
     entries[len / 2].body = Body::TaskClaim {
         task,
         priority: priority + 1, // exactly one byte of the canonical encoding

@@ -64,9 +64,13 @@ fn one_altered_byte_in_a_middle_entry_breaks_verification() {
 
     let mut entries = log.entries().to_vec();
     let mid = &mut entries[500];
-    // `Body` has exactly one variant at M1; when a second arrives this
-    // destructure stops compiling and the test must be revisited.
-    let Body::TaskClaim { task, priority } = mid.body;
+    // M3 added `Body::Withdraw`, so this destructure is no longer
+    // irrefutable — which is the notice `docs/spec-m1.md` §5 intended. It is
+    // still `chain_of` that builds this chain and it writes claims only, so
+    // the other variant is genuinely unreachable here.
+    let Body::TaskClaim { task, priority } = mid.body else {
+        panic!("chain_of writes TaskClaim entries only");
+    };
     mid.body = Body::TaskClaim {
         task,
         priority: priority + 1,

@@ -13,12 +13,14 @@
 //! # Scope
 //!
 //! M0's placeholder (count-and-echo) and M1's foundation (`Entry`, the hash
-//! chain, an empty `VersionVector`) are both superseded here: M2 activates
-//! causal delivery and anti-entropy, specified in `docs/spec-m2.md`. Nodes
-//! now author and broadcast real [`wire::Entry`] values, buffer what they
-//! cannot yet apply, and periodically exchange version vectors to close
-//! gaps. [`wire`] and [`log`] are unchanged from M1; [`causal`] gains the
-//! comparison and bookkeeping operations M2 needs.
+//! chain, an empty `VersionVector`) were superseded at M2, which activated
+//! causal delivery and anti-entropy (`docs/spec-m2.md`). **M3** gives the
+//! entries their meaning (`docs/spec-m3.md`): a node claims tasks, folds every
+//! entry it applies into the task-claim CRDT in [`state`], computes the
+//! deterministic winner of each task, and publishes a [`wire::Body::Withdraw`]
+//! record for any task it claimed and lost. [`log`] is unchanged from M1;
+//! [`wire`] gains one `Body` variant; [`causal`] gains the derived logical
+//! clock M3's winner rule needs.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -30,6 +32,7 @@ extern crate std;
 
 pub mod causal;
 pub mod log;
+pub mod state;
 pub mod wire;
 
 use alloc::collections::BTreeMap;
@@ -38,6 +41,7 @@ use alloc::vec::Vec;
 use ed25519_dalek::SigningKey;
 
 use causal::VersionVector;
+use state::{Claims, TaskId};
 use wire::{Body, Hash, Roster, VerifiedEntry};
 
 /// A member of the roster.
@@ -143,6 +147,10 @@ pub struct State {
     /// (`docs/spec-m2.md` §5).
     buffer: BTreeMap<(NodeId, u64), BufferedEntry>,
     buffer_cap: usize,
+    /// The task-claim CRDT, folded from every applied entry
+    /// (`docs/spec-m3.md` §4). No cap of its own: bounded transitively by
+    /// `log_cap` across the roster, exactly as `origins` is.
+    claims: Claims,
 }
 
 impl State {
@@ -185,6 +193,7 @@ impl State {
             causal_vv: VersionVector::new(),
             buffer: BTreeMap::new(),
             buffer_cap,
+            claims: Claims::new(),
         }
     }
 
@@ -201,6 +210,13 @@ impl State {
     /// This node's causal version vector.
     pub fn causal_vv(&self) -> &VersionVector {
         &self.causal_vv
+    }
+
+    /// The task-claim CRDT as this node has derived it (`docs/spec-m3.md`
+    /// §4). Two nodes holding the same entry set hold an identical one — that
+    /// is invariant I3.
+    pub fn claims(&self) -> &Claims {
+        &self.claims
     }
 
     /// Keys currently held in the causal buffer, in no particular order
@@ -251,10 +267,85 @@ fn attempt_apply(state: &mut State, entry: wire::Entry) -> bool {
     match log::verify_next(&state.roster, 0, expected_seq, prev, &entry) {
         Ok(verified) => {
             state.causal_vv.bump(entry.node, entry.seq);
+            state.claims.observe(&verified);
             state.origins.entry(entry.node).or_default().push(verified);
             true
         }
         Err(_) => false,
+    }
+}
+
+/// The task this node claims next: the number of claims already in its own
+/// log, so every node walks `0, 1, 2, …` and every task is therefore
+/// contested by every node (`docs/spec-m3.md` §6).
+///
+/// Derived rather than counted in a field on purpose: a separate counter
+/// could drift out of step with the log after a refused append, and a derived
+/// value cannot. The scan is over a `log_cap`-bounded vector once per
+/// `entry_period` — `DESIGN.md` §9 declines to optimise this at Phase 1 scale.
+fn next_task(state: &State) -> TaskId {
+    state
+        .log
+        .entries()
+        .iter()
+        .filter(|e| matches!(e.body, Body::TaskClaim { .. }))
+        .count() as TaskId
+}
+
+/// Appends `body` to this node's own chain, folds it into the node's own
+/// derived state, and broadcasts it to every peer ascending by `NodeId` (R4).
+///
+/// A full log is a silent no-op (`docs/spec-m1.md` §6 refuses rather than
+/// evicts): graceful degradation, not a crash.
+fn author(state: &mut State, body: Body, effects: &mut Vec<Effect>) {
+    // `deps` is the causal snapshot taken *before* the append, and the
+    // node's own component is bumped *after* it — `docs/spec-m2.md` §3.
+    let deps = state.causal_vv.clone();
+    let entry = match state.log.append(body, deps) {
+        Ok(appended) => appended.clone(),
+        Err(_) => return,
+    };
+    state.causal_vv.bump(state.me, entry.seq);
+
+    // Verified by construction: this node has just signed this entry with its
+    // own key, at its own next seq, over its own chain head — every rule
+    // `log::verify_next` checks holds by the way it was built. Wrapping it
+    // here keeps `Claims::observe`'s type gate (`docs/spec-m1.md` §4.5) honest
+    // without a pointless round trip through the verifier.
+    state
+        .claims
+        .observe(&VerifiedEntry::from_verified(entry.clone()));
+
+    for &peer in &state.members {
+        effects.push(Effect::Send {
+            to: peer,
+            payload: Envelope::Entry(entry.clone()),
+        });
+    }
+}
+
+/// Authors a `Withdraw` for every task this node claimed, is not winning, and
+/// has not already withdrawn from — ascending by task id (`docs/spec-m3.md`
+/// §6). By §5.1 losing is monotone, so each fires at most once per task.
+///
+/// "Have I already withdrawn?" is asked of the derived state rather than of
+/// the raw log: the only way `(task, me)` enters `withdrawn` is an entry
+/// authored by `me`, and [`author`] folds those in as it writes them, so the
+/// two readings are the same and this one does not rescan the chain.
+fn author_withdrawals(state: &mut State, effects: &mut Vec<Effect>) {
+    let me = state.me;
+    let pending: Vec<TaskId> = state
+        .claims
+        .tasks()
+        .filter(|&task| {
+            state.claims.has_claimed(task, me)
+                && !state.claims.has_withdrawn(task, me)
+                && state.claims.winner(task).is_some_and(|w| w.node != me)
+        })
+        .collect();
+
+    for task in pending {
+        author(state, Body::Withdraw { task }, effects);
     }
 }
 
@@ -369,28 +460,22 @@ pub fn step(state: &State, ev: Event, now: LogicalTime) -> (State, Vec<Effect>) 
             }
         }
         Event::Tick => {
-            // Fixed order within the tick: a node's own entry (if due) is
-            // created and broadcast before its anti-entropy advertisement
-            // (if also due this tick) — normative, `docs/spec-m2.md` §6.
+            // All entry authorship happens here and never in `Recv`
+            // (`docs/spec-m3.md` §6): a node that authored while draining its
+            // causal buffer would interleave authorship with the fixed-point
+            // drain of `docs/spec-m2.md` §4. The order within the tick is
+            // normative — claim, then withdrawals, then the advertisement.
             if next.entry_period != 0 && now.0.is_multiple_of(next.entry_period) {
-                let deps = next.causal_vv.clone();
-                let body = Body::TaskClaim {
-                    task: next.log.next_seq(),
+                let claim = Body::TaskClaim {
+                    task: next_task(&next),
+                    // Fixed for autonomously authored claims: nothing in
+                    // Phase 1 produces real priorities, and an unused
+                    // configuration knob is what `DESIGN.md` §11.4 forbids
+                    // (`docs/spec-m3.md` §6, §11).
                     priority: 1,
                 };
-                if let Ok(appended) = next.log.append(body, deps) {
-                    let seq = appended.seq;
-                    let entry = appended.clone();
-                    next.causal_vv.bump(next.me, seq);
-                    for &peer in &next.members {
-                        effects.push(Effect::Send {
-                            to: peer,
-                            payload: Envelope::Entry(entry.clone()),
-                        });
-                    }
-                }
-                // A full log is a silent no-op: graceful degradation, not a
-                // crash. Not exercised at M2's default `log_cap`.
+                author(&mut next, claim, &mut effects);
+                author_withdrawals(&mut next, &mut effects);
             }
             if next.anti_entropy_period != 0 && now.0.is_multiple_of(next.anti_entropy_period) {
                 for &peer in &next.members {
@@ -611,6 +696,128 @@ mod tests {
         assert_eq!(c1.causal_vv(), c2.causal_vv());
         assert_eq!(c1.entries(), c2.entries());
         assert_eq!(c1.buffer_keys().count(), c2.buffer_keys().count());
+    }
+
+    // -----------------------------------------------------------------
+    // M3 authoring rules (`docs/spec-m3.md` §6)
+    // -----------------------------------------------------------------
+
+    /// Extracts the entries a `step` broadcast, deduplicated: the same entry
+    /// goes to every peer, and what matters here is *which* entries were
+    /// authored, not how many peers heard them.
+    fn authored(fx: &[Effect]) -> Vec<wire::Entry> {
+        let mut out: Vec<wire::Entry> = Vec::new();
+        for Effect::Send { payload, .. } in fx {
+            if let Envelope::Entry(e) = payload {
+                if !out.iter().any(|k| k.seq == e.seq && k.node == e.node) {
+                    out.push(e.clone());
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn a_node_claims_tasks_zero_one_two_in_order() {
+        // Every node walks the same task numbering, which is what makes every
+        // task contested (`docs/spec-m3.md` §6) — M2 numbered tasks by the
+        // author's own seq, so nothing ever collided.
+        let (roster, keys) = roster3();
+        let mut s = state(NodeId(0), &roster, &keys[0], 10);
+        for expected in 0..3u64 {
+            let (next, fx) = step(&s, Event::Tick, LogicalTime((expected + 1) * 10));
+            let bodies: Vec<Body> = authored(&fx).iter().map(|e| e.body).collect();
+            assert_eq!(
+                bodies,
+                [Body::TaskClaim {
+                    task: expected,
+                    priority: 1
+                }]
+            );
+            s = next;
+        }
+        assert_eq!(s.claims().tasks().collect::<Vec<_>>(), [0, 1, 2]);
+    }
+
+    #[test]
+    fn the_sole_claimant_wins_and_never_withdraws() {
+        let (roster, keys) = roster3();
+        let s = state(NodeId(0), &roster, &keys[0], 10);
+        let (s, _) = step(&s, Event::Tick, LogicalTime(10));
+        assert_eq!(s.claims().winner(0).map(|w| w.node), Some(NodeId(0)));
+
+        let (s2, fx) = step(&s, Event::Tick, LogicalTime(20));
+        let bodies: Vec<Body> = authored(&fx).iter().map(|e| e.body).collect();
+        assert_eq!(
+            bodies,
+            [Body::TaskClaim {
+                task: 1,
+                priority: 1
+            }],
+            "the winner claims the next task and writes no withdrawal"
+        );
+        assert!(!s2.claims().has_withdrawn(0, NodeId(0)));
+    }
+
+    #[test]
+    fn a_losing_node_withdraws_exactly_once_on_the_next_period() {
+        let (roster, keys) = roster3();
+
+        // A claims task 0 first, with an empty `deps` — lc 0, the strongest
+        // possible clock (`docs/spec-m3.md` §3).
+        let a = state(NodeId(0), &roster, &keys[0], 10);
+        let (_, a_fx) = step(&a, Event::Tick, LogicalTime(10));
+        let a0 = authored(&a_fx).remove(0);
+
+        // C claims task 0 too, then hears A's claim and loses: A's lc is 0
+        // and its NodeId is lower.
+        let c = state(NodeId(2), &roster, &keys[2], 10);
+        let (c, _) = step(&c, Event::Tick, LogicalTime(10));
+        assert_eq!(c.claims().winner(0).map(|w| w.node), Some(NodeId(2)));
+
+        let (c, fx) = step(
+            &c,
+            Event::Recv {
+                from: NodeId(0),
+                payload: Envelope::Entry(a0),
+            },
+            LogicalTime(11),
+        );
+        assert_eq!(c.claims().winner(0).map(|w| w.node), Some(NodeId(0)));
+        assert!(
+            fx.is_empty(),
+            "authorship never happens in Recv (`docs/spec-m3.md` §6)"
+        );
+        assert!(!c.claims().has_withdrawn(0, NodeId(2)), "not yet — on Tick");
+
+        // The next entry_period: C claims task 1 *and* withdraws from task 0,
+        // in that order.
+        let (c, fx) = step(&c, Event::Tick, LogicalTime(20));
+        let bodies: Vec<Body> = authored(&fx).iter().map(|e| e.body).collect();
+        assert_eq!(
+            bodies,
+            [
+                Body::TaskClaim {
+                    task: 1,
+                    priority: 1
+                },
+                Body::Withdraw { task: 0 },
+            ]
+        );
+        assert!(c.claims().has_withdrawn(0, NodeId(2)));
+
+        // And never again: losing is monotone, so the withdrawal is final
+        // (`docs/spec-m3.md` §5.1).
+        let (_, fx) = step(&c, Event::Tick, LogicalTime(30));
+        let bodies: Vec<Body> = authored(&fx).iter().map(|e| e.body).collect();
+        assert_eq!(
+            bodies,
+            [Body::TaskClaim {
+                task: 2,
+                priority: 1
+            }],
+            "task 0 must not be withdrawn from twice"
+        );
     }
 
     #[test]

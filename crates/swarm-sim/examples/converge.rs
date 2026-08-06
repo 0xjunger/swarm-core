@@ -13,7 +13,7 @@
 
 use std::collections::BTreeMap;
 
-use swarm_core::wire::Entry;
+use swarm_core::wire::{Body, Entry};
 use swarm_core::{Envelope, NodeId};
 use swarm_sim::{run_with_states, Partition, SimConfig, TraceRecord};
 
@@ -40,7 +40,10 @@ fn main() {
     // default: a periodic creator runs for the whole simulation (a static
     // `SimConfig` has no "stop after tick N"), so the tail between the
     // last entry any node creates and the run's end must be wide enough
-    // for it to actually finish propagating. See `tests/m2_convergence.rs`.
+    // for it to actually finish propagating — and `anti_entropy_period` must
+    // fit several rounds into that tail, since each round is one more chance
+    // to close a gap the loss model opened. See `tests/m2_convergence.rs`,
+    // which states the measured margins.
     let cfg = SimConfig {
         nodes: 3,
         seed,
@@ -50,7 +53,7 @@ fn main() {
         delay_max: 3,
         queue_cap: 256,
         entry_period: 40,
-        anti_entropy_period: 15,
+        anti_entropy_period: 5,
         log_cap: 1000,
         buffer_cap: 32,
         partitions: vec![
@@ -180,7 +183,14 @@ fn main() {
 /// library, per `watch.rs`'s own doc comment).
 fn envelope_label(e: &Envelope) -> String {
     match e {
-        Envelope::Entry(entry) => format!("entry n{}#{}", entry.node.0, entry.seq),
+        Envelope::Entry(entry) => match entry.body {
+            Body::TaskClaim { task, .. } => {
+                format!("entry n{}#{} claim t{task}", entry.node.0, entry.seq)
+            }
+            Body::Withdraw { task } => {
+                format!("entry n{}#{} withdraw t{task}", entry.node.0, entry.seq)
+            }
+        },
         Envelope::AntiEntropy(vv) => format!("vv sync ({} known)", vv.iter().count()),
     }
 }

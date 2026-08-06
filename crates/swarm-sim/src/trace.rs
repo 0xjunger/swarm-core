@@ -10,6 +10,7 @@
 
 use std::fmt::Write as _;
 use swarm_core::causal::VersionVector;
+use swarm_core::wire::Body;
 use swarm_core::{Envelope, NodeId};
 
 /// One observable event.
@@ -221,11 +222,26 @@ fn render_envelope(e: &Envelope) -> String {
     match e {
         Envelope::Entry(entry) => {
             format!(
-                "kind=ENTRY origin={:03} seq={:012}",
-                entry.node.0, entry.seq
+                "kind=ENTRY origin={:03} seq={:012} {}",
+                entry.node.0,
+                entry.seq,
+                render_body(&entry.body)
             )
         }
         Envelope::AntiEntropy(vv) => format!("kind=ANTI_ENTROPY vv=[{}]", render_vv(vv)),
+    }
+}
+
+/// The entry's meaning (`docs/spec-m3.md` §12). M3 is the first milestone in
+/// which the body carries anything, and a trace a human cannot read is a trace
+/// a human cannot debug. Same canonical rules as everything else here: fixed
+/// field order, zero-padded integers, no floats.
+fn render_body(b: &Body) -> String {
+    match b {
+        Body::TaskClaim { task, priority } => {
+            format!("body=CLAIM task={task:012} prio={priority:03}")
+        }
+        Body::Withdraw { task } => format!("body=WITHDRAW task={task:012}"),
     }
 }
 
@@ -324,8 +340,33 @@ mod tests {
         assert_eq!(
             t.render(),
             "t=000000000012 TICK\n\
-             t=000000000012 DELIVER from=001 to=003 kind=ENTRY origin=001 seq=000000000007\n"
+             t=000000000012 DELIVER from=001 to=003 kind=ENTRY origin=001 \
+             seq=000000000007 body=CLAIM task=000000000003 prio=001\n"
         );
+    }
+
+    /// A claim and a withdrawal for the same task must not render alike:
+    /// `docs/spec.md` §6.1 makes the trace a fingerprint of the *model*, and
+    /// M3's model distinguishes these two (`docs/spec-m3.md` §12).
+    #[test]
+    fn claim_and_withdrawal_render_distinctly() {
+        let mut e = entry();
+        let claim = Envelope::Entry(e.clone());
+        e.body = Body::Withdraw { task: 3 };
+        let withdraw = Envelope::Entry(e);
+
+        let line = |p: Envelope| {
+            let mut t = Trace::default();
+            t.push(TraceRecord::Send {
+                at: 1,
+                from: NodeId(1),
+                to: NodeId(2),
+                payload: p,
+            });
+            t.render()
+        };
+        assert!(line(claim).contains("body=CLAIM task=000000000003 prio=001"));
+        assert!(line(withdraw).contains("body=WITHDRAW task=000000000003"));
     }
 
     #[test]

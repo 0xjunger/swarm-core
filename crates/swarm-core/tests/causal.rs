@@ -204,15 +204,26 @@ fn anti_entropy_reply_spans_every_behind_origin_ascending() {
     let w0 = raw_entry(w, &keys[0], 0, Hash::ZERO, VersionVector::new());
     let w1 = raw_entry(w, &keys[0], 1, w0.chain_hash(), vv(&[(w, 0)]));
 
-    // Y receives both of W's entries, then authors one of its own via a
-    // real `Tick` (entry_period fires every tick here) — this is the only
-    // path that correctly appends to Y's own log and advances its own
-    // causal_vv component, exactly as `docs/spec-m2.md` §3 specifies.
+    // Y receives both of W's entries, then authors its own via a real `Tick`
+    // (entry_period fires every tick here) — this is the only path that
+    // correctly appends to Y's own log and advances its own causal_vv
+    // component, exactly as `docs/spec-m2.md` §3 specifies.
+    //
+    // Y authors *two* entries in that one tick, and that is M3 working as
+    // specified: `raw_entry` gives w0 the body `TaskClaim { task: 0 }`, Y's
+    // own first claim is also task 0 (`docs/spec-m3.md` §6 numbers claims by
+    // the author's own claim count), and W wins it — W's claim has lc 0
+    // against Y's lc 2, and lower lc wins (§5). So Y claims, immediately
+    // observes that it lost, and withdraws in the same tick.
     let y_state = State::new(y, roster.clone(), keys[2].clone(), 64, 8, 1, 0);
     let y_state = recv(&y_state, w, w0, 1);
     let y_state = recv(&y_state, w, w1, 2);
     let (y_state, y0_fx) = step(&y_state, Event::Tick, LogicalTime(3));
-    assert_eq!(y0_fx.len(), 3, "broadcast to W, X and Z, not to itself");
+    assert_eq!(
+        y0_fx.len(),
+        6,
+        "a claim and a withdrawal, each broadcast to W, X and Z, never to itself"
+    );
 
     // X advertises a VV that only knows W's seq 0 — behind on W by one, and
     // has never heard of Y at all.
@@ -233,8 +244,9 @@ fn anti_entropy_reply_spans_every_behind_origin_ascending() {
             Envelope::AntiEntropy(_) => panic!("expected entries only"),
         })
         .collect();
-    // Ascending by origin (W=0 before Y=2), then by seq within an origin.
-    assert_eq!(sent, [(w, 1), (y, 0)]);
+    // Ascending by origin (W=0 before Y=2), then by seq within an origin —
+    // both of Y's entries, since X has never heard of Y at all.
+    assert_eq!(sent, [(w, 1), (y, 0), (y, 1)]);
     assert!(fx
         .iter()
         .all(|swarm_core::Effect::Send { to, .. }| *to == x));

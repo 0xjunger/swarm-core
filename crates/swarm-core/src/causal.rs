@@ -56,6 +56,24 @@ impl VersionVector {
             .all(|(node, seq)| other.inner.get(node).is_some_and(|o| o >= seq))
     }
 
+    /// The number of entries this vector accounts for: `Σ (seq + 1)` over
+    /// every component, since seqs count from zero.
+    ///
+    /// This is M3's derived logical clock (`docs/spec-m3.md` §3). Read off an
+    /// entry's `deps` it gives "how many entries had this author applied when
+    /// it wrote this?", which is strictly increasing along causal order — the
+    /// proof is in the spec. It is the `logical_clock` term of `DESIGN.md`
+    /// §4.2's winner rule, obtained without adding a field to the wire format.
+    ///
+    /// Saturating: an overflow would need more than `u64::MAX` entries, which
+    /// the bounded log makes unreachable, but wrapping silently is not a
+    /// behaviour worth having in a tie-break.
+    pub fn entry_count(&self) -> u64 {
+        self.inner
+            .values()
+            .fold(0u64, |acc, &seq| acc.saturating_add(seq.saturating_add(1)))
+    }
+
     /// Ascending by `NodeId` (rule R4, `docs/spec.md` §6) — `BTreeMap`
     /// iteration order, by construction.
     pub fn iter(&self) -> impl Iterator<Item = (NodeId, u64)> + '_ {
@@ -132,6 +150,30 @@ mod tests {
         let mut a = VersionVector::new();
         a.bump(NodeId(5), 1);
         assert!(!a.le(&VersionVector::new()));
+    }
+
+    #[test]
+    fn entry_count_sums_seq_plus_one_per_component() {
+        assert_eq!(VersionVector::new().entry_count(), 0);
+        let mut vv = VersionVector::new();
+        vv.bump(NodeId(0), 0); // one entry from node 0
+        assert_eq!(vv.entry_count(), 1);
+        vv.bump(NodeId(1), 2); // three more from node 1
+        assert_eq!(vv.entry_count(), 4);
+    }
+
+    #[test]
+    fn entry_count_grows_with_every_bump() {
+        // The property M3's tie-break leans on: applying an entry strictly
+        // increases the clock (`docs/spec-m3.md` §3.1).
+        let mut vv = VersionVector::new();
+        let mut last = vv.entry_count();
+        for seq in 0..5 {
+            vv.bump(NodeId(0), seq);
+            let now = vv.entry_count();
+            assert!(now > last, "clock must strictly increase");
+            last = now;
+        }
     }
 
     #[test]
