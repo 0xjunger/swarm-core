@@ -12,8 +12,8 @@
 
 use ed25519_dalek::SigningKey;
 use std::collections::{BTreeMap, BTreeSet};
-use swarm_core::wire::{Roster, PHASE1_EPOCH, PHASE1_MISSION_ID};
-use swarm_core::{step, Effect, Event, LogicalTime, NodeId, State};
+use swarm_core::wire::{Body, Roster, UnsignedEntry, PHASE1_EPOCH, PHASE1_MISSION_ID};
+use swarm_core::{step, Effect, Envelope, Event, LogicalTime, NodeId, State};
 
 use crate::net::{Msg, Network};
 use crate::partition::Partition;
@@ -47,6 +47,25 @@ pub struct SimConfig {
     /// randomised churn will be a seeded *generator of this same script*; the loop
     /// below does not change.
     pub partitions: Vec<(u64, Partition)>,
+    /// A deliberately faulty node, if any (`docs/spec.md` §11, M4): the
+    /// channel still only drops and delays (`docs/spec.md` §14, "Byzantine
+    /// transport" stays out of scope) — the *node* forges, at the protocol
+    /// layer, by having its genesis entry re-signed differently for each
+    /// listed victim.
+    pub equivocation: Option<Equivocation>,
+    /// Per-node escrow allocation (`docs/spec.md` §13, M5). Defaults to 3
+    /// per `DESIGN.md` M5. Nodes issue one `Spend { amount: 1 }` per
+    /// `entry_period` tick while budget remains.
+    pub budget_per_node: u64,
+}
+
+/// A node that signs two different genesis entries — one real, one forged
+/// per victim — and sends each victim the one meant for it (`DESIGN.md`
+/// §4.4's demo scenario).
+#[derive(Clone, Debug)]
+pub struct Equivocation {
+    pub node: NodeId,
+    pub victims: BTreeSet<NodeId>,
 }
 
 impl Default for SimConfig {
@@ -64,6 +83,8 @@ impl Default for SimConfig {
             log_cap: 1000,
             buffer_cap: 32,
             partitions: Vec::new(),
+            equivocation: None,
+            budget_per_node: 3,
         }
     }
 }
@@ -71,6 +92,16 @@ impl Default for SimConfig {
 impl SimConfig {
     pub fn roster(&self) -> Vec<NodeId> {
         (0..self.nodes).map(NodeId).collect()
+    }
+
+    /// The per-node budget map handed to `State::with_budgets` and to
+    /// `swarm-verify::check_invariants` — one source of truth so a caller
+    /// checking I4 cannot reconstruct it inconsistently.
+    pub fn budgets(&self) -> BTreeMap<NodeId, u64> {
+        self.roster()
+            .into_iter()
+            .map(|n| (n, self.budget_per_node))
+            .collect()
     }
 }
 
@@ -84,13 +115,67 @@ fn node_key(node: NodeId) -> SigningKey {
 }
 
 /// The shared mission roster: every node's identity and verifying key,
-/// fixed for the whole run (`DESIGN.md` §7).
-fn build_roster(nodes: &[NodeId]) -> Roster {
+/// fixed for the whole run (`DESIGN.md` §7). Public so a test or example can
+/// build the same roster a third party would hold to verify a proof of
+/// equivocation without running the simulator itself (`docs/spec.md` §11,
+/// M4) — nothing here is simulator-internal, it is just public keys.
+pub fn build_roster(nodes: &[NodeId]) -> Roster {
     let keys = nodes
         .iter()
         .map(|&n| (n, node_key(n).verifying_key()))
         .collect();
     Roster::new(PHASE1_MISSION_ID, PHASE1_EPOCH, keys)
+}
+
+/// A different, validly signed entry at the same `(node, seq, prev, deps)` as
+/// `original` — the forged half of an equivocation (`docs/spec.md` §11, M4).
+/// Re-signed with the same node's own key: the simulator forges *as* the
+/// faulty node, not as the channel, keeping `docs/spec.md` §14's "Byzantine
+/// transport" boundary honest.
+fn forge_alt_entry(original: &swarm_core::wire::Entry, node: NodeId) -> swarm_core::wire::Entry {
+    let alt_body = match original.body {
+        Body::TaskClaim { task, priority } => Body::TaskClaim {
+            task: task.wrapping_add(1_000_000),
+            priority: priority.wrapping_add(1).max(1),
+        },
+        Body::Withdraw { task } => Body::Withdraw {
+            task: task.wrapping_add(1_000_000),
+        },
+        Body::Spend { amount } => Body::Spend {
+            amount: amount.wrapping_add(1_000_000),
+        },
+    };
+    UnsignedEntry {
+        mission_id: original.mission_id,
+        epoch: original.epoch,
+        node: original.node,
+        seq: original.seq,
+        prev: original.prev,
+        deps: original.deps.clone(),
+        body: alt_body,
+    }
+    .sign(&node_key(node))
+}
+
+/// If `cfg` names `from` as the equivocator and `to` as one of its victims,
+/// swaps the genesis entry for a differently signed copy at the same
+/// `(node, seq)` (`docs/spec.md` §11, M4). Only the genesis entry is forged:
+/// once a victim holds the forged copy, the equivocator's later entries fail
+/// `BadPrevLink` at that victim by the ordinary chain-verification rule
+/// (`docs/spec.md` §8.3) — no further forging is needed to keep the two
+/// sides apart. Every other `(from, to, payload)` triple passes through
+/// unchanged.
+fn maybe_forge(cfg: &SimConfig, from: NodeId, to: NodeId, payload: Envelope) -> Envelope {
+    let Some(eq) = &cfg.equivocation else {
+        return payload;
+    };
+    if from != eq.node || !eq.victims.contains(&to) {
+        return payload;
+    }
+    match payload {
+        Envelope::Entry(entry) if entry.seq == 0 => Envelope::Entry(forge_alt_entry(&entry, from)),
+        other => other,
+    }
 }
 
 /// Runs a simulation to completion and returns its trace.
@@ -122,6 +207,7 @@ pub fn run_with_states(cfg: &SimConfig) -> (Trace, BTreeMap<NodeId, State>) {
 
     let roster_ids = cfg.roster();
     let roster = build_roster(&roster_ids);
+    let budgets: BTreeMap<NodeId, u64> = cfg.budgets();
     let mut states: BTreeMap<NodeId, State> = roster_ids
         .iter()
         .map(|&n| {
@@ -135,7 +221,8 @@ pub fn run_with_states(cfg: &SimConfig) -> (Trace, BTreeMap<NodeId, State>) {
                     cfg.buffer_cap,
                     cfg.entry_period,
                     cfg.anti_entropy_period,
-                ),
+                )
+                .with_budgets(budgets.clone()),
             )
         })
         .collect();
@@ -187,7 +274,16 @@ pub fn run_with_states(cfg: &SimConfig) -> (Trace, BTreeMap<NodeId, State>) {
                 let (next, fx) = step(&states[&dest], ev, now);
                 trace_state_diff(&mut trace, dest, tick, &states[&dest], &next);
                 states.insert(dest, next);
-                emit(&mut trace, &mut net, &mut rng, cfg, dest, tick, fx);
+                // Never authoring: only relaying (anti-entropy push replies,
+                // §9.5) — see `emit`'s `authoring` parameter.
+                emit(
+                    &mut Runtime { trace: &mut trace, net: &mut net, rng: &mut rng },
+                    cfg,
+                    dest,
+                    tick,
+                    fx,
+                    false,
+                );
             }
         }
 
@@ -196,7 +292,18 @@ pub fn run_with_states(cfg: &SimConfig) -> (Trace, BTreeMap<NodeId, State>) {
             let (next, fx) = step(&states[&node], Event::Tick, now);
             trace_state_diff(&mut trace, node, tick, &states[&node], &next);
             states.insert(node, next);
-            emit(&mut trace, &mut net, &mut rng, cfg, node, tick, fx);
+            // The only phase in which a node can author a brand-new entry
+            // (`author` is only called from `Event::Tick`, `docs/spec.md`
+            // §10.6) — so it is the only phase in which equivocation's
+            // one-time forged genesis broadcast can legitimately happen.
+            emit(
+                &mut Runtime { trace: &mut trace, net: &mut net, rng: &mut rng },
+                cfg,
+                node,
+                tick,
+                fx,
+                true,
+            );
         }
     }
 
@@ -258,21 +365,55 @@ fn trace_state_diff(trace: &mut Trace, node: NodeId, tick: u64, old: &State, new
             });
         }
     }
+
+    // A newly verified proof of equivocation (`docs/spec.md` §11, M4). At
+    // most one proof is kept per accused node (`swarm-core`'s own bound), so
+    // the diff is just "which accused nodes are new since last step".
+    let old_faulty: BTreeSet<NodeId> = old.poes().map(|p| p.node()).collect();
+    for poe in new.poes() {
+        if !old_faulty.contains(&poe.node()) {
+            trace.push(TraceRecord::Equivocation {
+                at: tick,
+                witness: node,
+                accused: poe.node(),
+                seq: poe.seq(),
+            });
+        }
+    }
 }
 
 /// Hands the core's effects to the channel.
-fn emit(
-    trace: &mut Trace,
-    net: &mut Network,
-    rng: &mut SimRng,
-    cfg: &SimConfig,
-    from: NodeId,
-    tick: u64,
-    effects: Vec<Effect>,
-) {
+///
+/// `authoring` is `true` only for effects produced by `Event::Tick` — the
+/// one path that can call `author` (`docs/spec.md` §10.6) and therefore the
+/// only point at which a faulty node's one-time forged genesis broadcast may
+/// legitimately be substituted (`docs/spec.md` §11, M4). Effects produced by
+/// `Event::Recv` are always a relay of something already stored — an
+/// anti-entropy push reply, possibly of the equivocator's own honestly-held
+/// entry — and must pass through unforged, or a victim could never receive
+/// the genuine article from anyone, including the equivocator's own later,
+/// honest replies about its own log.
+/// The three pieces of per-run mutable state `emit` needs, bundled so the
+/// function takes one parameter for them instead of three
+/// (`PHASE1-REMEDIATION.md` B5).
+struct Runtime<'a> {
+    trace: &'a mut Trace,
+    net: &'a mut Network,
+    rng: &'a mut SimRng,
+}
+
+fn emit(rt: &mut Runtime, cfg: &SimConfig, from: NodeId, tick: u64, effects: Vec<Effect>, authoring: bool) {
     for e in effects {
         let Effect::Send { to, payload } = e;
-        trace.push(TraceRecord::Send {
+        // A faulty node signs a different genesis entry per victim
+        // (`docs/spec.md` §11, M4); an honest run's `cfg.equivocation` is
+        // `None` and this is a no-op either way.
+        let payload = if authoring {
+            maybe_forge(cfg, from, to, payload)
+        } else {
+            payload
+        };
+        rt.trace.push(TraceRecord::Send {
             at: tick,
             from,
             to,
@@ -284,11 +425,11 @@ fn emit(
         // random stream a function of loss and queue occupancy, so an unrelated
         // change to the partition schedule would scramble every subsequent draw and
         // make two traces incomparable.
-        let r_loss = rng.next_u32();
-        let r_delay = rng.next_u32();
+        let r_loss = rt.rng.next_u32();
+        let r_delay = rt.rng.next_u32();
 
         if r_loss % 1000 < cfg.loss_permille {
-            trace.push(TraceRecord::DropLoss { at: tick, from, to });
+            rt.trace.push(TraceRecord::DropLoss { at: tick, from, to });
             continue;
         }
 
@@ -296,15 +437,15 @@ fn emit(
         let span = cfg.delay_max - cfg.delay_min + 1;
         let due = tick + cfg.delay_min + u64::from(r_delay) % span;
 
-        let res = net.enqueue(due, Msg { from, to, payload });
+        let res = rt.net.enqueue(due, Msg { from, to, payload });
         if let Some(evicted) = res.evicted {
-            trace.push(TraceRecord::DropOverflow {
+            rt.trace.push(TraceRecord::DropOverflow {
                 at: tick,
                 to,
                 seq: evicted,
             });
         }
-        trace.push(TraceRecord::Enqueue {
+        rt.trace.push(TraceRecord::Enqueue {
             at: tick,
             due,
             from,

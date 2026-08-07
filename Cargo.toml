@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/swarm-core", "crates/swarm-sim"]
+members = ["crates/swarm-core", "crates/swarm-sim", "crates/swarm-verify"]
 
 [workspace.package]
 edition = "2021"
@@ -9,9 +9,25 @@ rust-version = "1.94"
 
 [workspace.dependencies]
 swarm-core = { path = "crates/swarm-core" }
+swarm-verify = { path = "crates/swarm-verify" }
 blake3 = { version = "1", default-features = false }
 # default-features off: no implicit `rand_core`, no `std`. swarm-core is
 # no_std; the `alloc` feature is added where the crate is used.
 ed25519-dalek = { version = "2", default-features = false }
 rand_chacha = { version = "0.3", default-features = false }
 rand_core = { version = "0.6", default-features = false }
+
+# `cargo test` (debug) was unusable — `m5_escrow` alone ran over 20 minutes,
+# because ed25519 signing and BLAKE3 hashing are pervasive in these tests and
+# unoptimised crypto is punishingly slow. Optimizing the whole test build and
+# these three dependency crates specifically brings the full workspace suite
+# to ~2.5 minutes (`PHASE1-REMEDIATION.md` B5).
+[profile.test]
+opt-level = 2
+
+[profile.dev.package.ed25519-dalek]
+opt-level = 3
+[profile.dev.package.blake3]
+opt-level = 3
+[profile.dev.package.curve25519-dalek]
+opt-level = 3

@@ -244,9 +244,13 @@ fn anti_entropy_reply_spans_every_behind_origin_ascending() {
             Envelope::AntiEntropy(_) => panic!("expected entries only"),
         })
         .collect();
-    // Ascending by origin (W=0 before Y=2), then by seq within an origin —
-    // both of Y's entries, since X has never heard of Y at all.
-    assert_eq!(sent, [(w, 1), (y, 0), (y, 1)]);
+    // Ascending by origin (W=0 before Y=2), then by seq within an origin.
+    // `(w, 0)` is re-sent even though X already claims to have it: the reply
+    // overlaps by one with the peer's advertised head so that equivocation on
+    // that entry can be caught (`docs/spec.md` §11, M4) — a version vector
+    // counts entries, it does not identify them. `(w, 1)` and both of Y's
+    // entries are genuinely missing.
+    assert_eq!(sent, [(w, 0), (w, 1), (y, 0), (y, 1)]);
     assert!(fx
         .iter()
         .all(|swarm_core::Effect::Send { to, .. }| *to == x));

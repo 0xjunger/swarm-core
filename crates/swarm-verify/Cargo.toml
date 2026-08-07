@@ -1,0 +1,13 @@
+[package]
+name = "swarm-verify"
+version = "0.1.0"
+description = "Invariant checker for swarm-core. Takes final states from a simulation run and checks I1-I4 (I5/I6 are structural)."
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+swarm-core.workspace = true
+
+[dev-dependencies]
+ed25519-dalek = { workspace = true, features = ["alloc"] }

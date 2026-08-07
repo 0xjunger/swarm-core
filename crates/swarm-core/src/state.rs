@@ -52,15 +52,40 @@ pub struct Claim {
 /// the OR-set here: `Claim` carries its own unique `(node, seq)` tag, so two
 /// nodes bidding identically produce two elements rather than one. `remove` is
 /// not implemented — see [`Claims::observe`] and `docs/spec.md` §10.4.
-#[derive(Clone, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Claims {
     by_task: BTreeMap<TaskId, BTreeSet<Claim>>,
     withdrawn: BTreeSet<(TaskId, NodeId)>,
+    /// The observing node's own id. Only read by [`Claims::winner`] under
+    /// the `mutant-i3` feature (`PHASE1-REMEDIATION.md` A2) to simulate a
+    /// self-preferring tie-break bug; otherwise unused, since the real
+    /// winner rule is `Claim`'s `Ord` alone and has no notion of "self".
+    #[cfg(feature = "mutant-i3")]
+    owner: Option<NodeId>,
 }
+
+/// Equality is over observed claims and withdrawals only — `owner` (present
+/// only under `mutant-i3`) is bookkeeping about who is asking, not part of
+/// the derived state, and must not by itself make two nodes' `Claims` look
+/// unequal to `swarm-verify`'s I3 check.
+impl PartialEq for Claims {
+    fn eq(&self, other: &Self) -> bool {
+        self.by_task == other.by_task && self.withdrawn == other.withdrawn
+    }
+}
+impl Eq for Claims {}
 
 impl Claims {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Records which node owns this `Claims`, for [`Claims::winner`]'s
+    /// `mutant-i3` tie-break (`PHASE1-REMEDIATION.md` A2). Does not exist
+    /// outside that feature.
+    #[cfg(feature = "mutant-i3")]
+    pub(crate) fn set_owner(&mut self, me: NodeId) {
+        self.owner = Some(me);
     }
 
     /// Folds one entry in. The **only** way state enters this structure.
@@ -92,6 +117,7 @@ impl Claims {
             Body::Withdraw { task } => {
                 self.withdrawn.insert((task, e.node));
             }
+            Body::Spend { .. } => { /* not claim-related */ }
         }
     }
 
@@ -101,7 +127,19 @@ impl Claims {
     /// winner rule itself — the rule is not restated here, so it cannot be
     /// restated wrongly.
     pub fn winner(&self, task: TaskId) -> Option<Claim> {
-        self.by_task.get(&task)?.first().copied()
+        let set = self.by_task.get(&task)?;
+        // I3 negative control (`PHASE1-REMEDIATION.md` A2): a self-preferring
+        // tie-break. Two nodes holding the *same* entry set now derive
+        // *different* winners whenever both claimed the task — genuine,
+        // node-dependent divergence, not a hand-built fake. Never built into
+        // a normal binary; `mutant-i3` is off by default.
+        #[cfg(feature = "mutant-i3")]
+        if let Some(owner) = self.owner {
+            if let Some(mine) = set.iter().find(|c| c.node == owner) {
+                return Some(*mine);
+            }
+        }
+        set.first().copied()
     }
 
     /// Every claim for `task`, ascending by the winner rule (best first).
@@ -126,6 +164,51 @@ impl Claims {
     /// withdrawal (`docs/spec.md` §10.6).
     pub fn has_claimed(&self, task: TaskId, node: NodeId) -> bool {
         self.claims(task).any(|c| c.node == node)
+    }
+}
+
+/// The escrow counter (`DESIGN.md` §M5): per-node spending capped by a fixed
+/// mission-start allocation.
+///
+/// A node's budget is immutable once set. Spending is cumulative — each
+/// `Spend` entry increases the node's total. The local check is `spent[node] +
+/// amount <= allocations[node]`. Because every node has its own cap, the
+/// global invariant I4 ("total spendable rights across all partitions ≤
+/// authorised total") holds structurally — no consensus, no quorum, no
+/// handshake.
+///
+/// Budget transfers (which *would* require a handshake) are not in M5's scope
+/// (`docs/spec.md` §13).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Escrow {
+    allocations: BTreeMap<NodeId, u64>,
+    spent: BTreeMap<NodeId, u64>,
+}
+
+impl Escrow {
+    pub fn new(budgets: BTreeMap<NodeId, u64>) -> Self {
+        Self {
+            allocations: budgets,
+            spent: BTreeMap::new(),
+        }
+    }
+
+    pub fn observe(&mut self, entry: &VerifiedEntry) {
+        let e = entry.entry();
+        if let Body::Spend { amount } = e.body {
+            let total = self.spent.entry(e.node).or_insert(0);
+            *total = total.saturating_add(amount);
+        }
+    }
+
+    pub fn remaining(&self, node: NodeId) -> u64 {
+        let alloc = self.allocations.get(&node).copied().unwrap_or(0);
+        let spent = self.spent.get(&node).copied().unwrap_or(0);
+        alloc.saturating_sub(spent)
+    }
+
+    pub fn can_spend(&self, node: NodeId, amount: u64) -> bool {
+        self.remaining(node) >= amount
     }
 }
 

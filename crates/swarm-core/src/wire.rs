@@ -41,9 +41,9 @@ impl Hash {
 
 /// What an entry means.
 ///
-/// One variant at M1, two at M3 (`DESIGN.md`, item 3): new variants arrive
-/// only when a test demands them (`DESIGN.md` §11.4), and each arrives with a
-/// test — the golden vector covers both.
+/// One variant at M1, two at M3, three at M5 (`DESIGN.md`, item 3): new
+/// variants arrive only when a test demands them (`DESIGN.md` §11.4), and
+/// each arrives with a test — the golden vector covers all three.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Body {
     /// "I claim task `task` with priority `priority`." M3's deterministic
@@ -58,11 +58,18 @@ pub enum Body {
     /// claim from the claim set (`docs/spec.md` §10.4). This is the
     /// "geri çekilme kaydı" M3's acceptance criterion asks for.
     Withdraw { task: u64 },
+    /// "I am spending `amount` from my escrow allocation." M5's escrow
+    /// counter: a node's total spending must never exceed the budget it was
+    /// allocated at mission start. The per-node cap means the global
+    /// invariant I4 — "sum of spend across all partitions ≤ authorised
+    /// total" — holds structurally, without consensus (`docs/spec.md` §13).
+    Spend { amount: u64 },
 }
 
 impl Body {
     const TAG_TASK_CLAIM: u8 = 0x00;
     const TAG_WITHDRAW: u8 = 0x01;
+    const TAG_SPEND: u8 = 0x02;
 
     fn encode(&self, out: &mut Vec<u8>) {
         match self {
@@ -74,6 +81,10 @@ impl Body {
             Body::Withdraw { task } => {
                 out.push(Self::TAG_WITHDRAW);
                 out.extend_from_slice(&task.to_be_bytes());
+            }
+            Body::Spend { amount } => {
+                out.push(Self::TAG_SPEND);
+                out.extend_from_slice(&amount.to_be_bytes());
             }
         }
     }
@@ -330,5 +341,28 @@ mod tests {
         Body::Withdraw { task: 7 }.encode(&mut withdraw);
         assert_ne!(claim, withdraw);
         assert_ne!(claim[0], withdraw[0]);
+    }
+
+    #[test]
+    fn spend_encodes_tag_and_amount() {
+        let mut out = Vec::new();
+        Body::Spend { amount: 1 }.encode(&mut out);
+        assert_eq!(out, [0x02, 0, 0, 0, 0, 0, 0, 0, 1]);
+    }
+
+    #[test]
+    fn spend_never_shares_an_encoding_with_claim_or_withdraw() {
+        // Distinct tags — same reasoning as `the_two_bodies_never_share_an_encoding`.
+        let (mut claim, mut withdraw, mut spend) = (Vec::new(), Vec::new(), Vec::new());
+        Body::TaskClaim {
+            task: 0,
+            priority: 0,
+        }
+        .encode(&mut claim);
+        Body::Withdraw { task: 0 }.encode(&mut withdraw);
+        Body::Spend { amount: 0 }.encode(&mut spend);
+        assert_ne!(spend, claim);
+        assert_ne!(spend, withdraw);
+        assert_eq!(spend[0], 0x02);
     }
 }

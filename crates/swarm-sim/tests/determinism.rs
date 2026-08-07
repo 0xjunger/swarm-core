@@ -31,6 +31,8 @@ fn busy(seed: u64) -> SimConfig {
         log_cap: 1000,
         buffer_cap: 32,
         partitions: Vec::new(),
+        equivocation: None,
+        budget_per_node: 3,
     }
 }
 

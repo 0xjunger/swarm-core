@@ -2,3 +2,4 @@
 Cargo.lock.bak
 *.trace
 .DS_Store
+/plans/

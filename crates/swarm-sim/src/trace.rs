@@ -95,6 +95,16 @@ pub enum TraceRecord {
         recv: u64,
         sent: u64,
     },
+    /// `witness` independently verified a proof that `accused` signed two
+    /// different entries at `(accused, seq)` (`docs/spec.md` §11, M4).
+    /// Derived the same way as `Apply`/`Buffer`: by diffing `State` before
+    /// and after a `step` call (`docs/spec.md` §9.6).
+    Equivocation {
+        at: u64,
+        witness: NodeId,
+        accused: NodeId,
+        seq: u64,
+    },
 }
 
 impl TraceRecord {
@@ -214,6 +224,18 @@ impl TraceRecord {
                     node.0
                 );
             }
+            Self::Equivocation {
+                at,
+                witness,
+                accused,
+                seq,
+            } => {
+                let _ = writeln!(
+                    out,
+                    "t={at:012} EQUIVOCATION witness={:03} accused={:03} seq={seq:012}",
+                    witness.0, accused.0
+                );
+            }
         }
     }
 }
@@ -242,6 +264,7 @@ fn render_body(b: &Body) -> String {
             format!("body=CLAIM task={task:012} prio={priority:03}")
         }
         Body::Withdraw { task } => format!("body=WITHDRAW task={task:012}"),
+        Body::Spend { amount } => format!("body=SPEND amount={amount}"),
     }
 }
 

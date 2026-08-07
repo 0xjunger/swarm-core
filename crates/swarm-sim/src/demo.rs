@@ -39,6 +39,9 @@ pub fn envelope_label(e: &Envelope) -> String {
             Body::Withdraw { task } => {
                 format!("entry n{}#{} withdraw t{task}", entry.node.0, entry.seq)
             }
+            Body::Spend { amount } => {
+                format!("entry n{}#{} spend {amount}", entry.node.0, entry.seq)
+            }
         },
         Envelope::AntiEntropy(vv) => format!("vv sync ({} known)", vv.iter().count()),
     }

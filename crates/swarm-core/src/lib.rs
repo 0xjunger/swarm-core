@@ -31,7 +31,9 @@ extern crate alloc;
 extern crate std;
 
 pub mod causal;
+pub mod fault;
 pub mod log;
+pub mod policy;
 pub mod state;
 pub mod wire;
 
@@ -41,7 +43,8 @@ use alloc::vec::Vec;
 use ed25519_dalek::SigningKey;
 
 use causal::VersionVector;
-use state::{Claims, TaskId};
+use fault::{verify_poe, Poe};
+use state::{Claims, Escrow, TaskId};
 use wire::{Body, Hash, Roster, VerifiedEntry};
 
 /// A member of the roster.
@@ -151,6 +154,14 @@ pub struct State {
     /// (`docs/spec.md` §10.3). No cap of its own: bounded transitively by
     /// `log_cap` across the roster, exactly as `origins` is.
     claims: Claims,
+    /// Proofs of equivocation this node has independently verified, keyed by
+    /// the accused node. Bounded by roster size: at most one proof is kept
+    /// per node, since one is already sufficient (`docs/spec.md` §11, M4).
+    poes: BTreeMap<NodeId, Poe>,
+    /// The escrow counter (`docs/spec.md` §13, M5): per-node spending capped
+    /// by a fixed mission-start allocation. Initialised empty — call
+    /// [`Self::with_budgets`] to set allocations before the first Tick.
+    escrow: Escrow,
 }
 
 impl State {
@@ -180,6 +191,10 @@ impl State {
         );
         assert!(buffer_cap >= 1, "buffer_cap must be at least 1");
         let members: Vec<NodeId> = roster.members().filter(|&n| n != me).collect();
+        #[allow(unused_mut)]
+        let mut claims = Claims::new();
+        #[cfg(feature = "mutant-i3")]
+        claims.set_owner(me);
         State {
             me,
             log: log::Log::new(me, key, log_cap),
@@ -193,8 +208,18 @@ impl State {
             causal_vv: VersionVector::new(),
             buffer: BTreeMap::new(),
             buffer_cap,
-            claims: Claims::new(),
+            claims,
+            poes: BTreeMap::new(),
+            escrow: Escrow::new(BTreeMap::new()),
         }
+    }
+
+    /// Sets the per-node escrow allocations. Without this call a node has
+    /// zero budget and will never author a `Spend` entry — a no-op that
+    /// preserves backward compatibility with M2-M4 tests.
+    pub fn with_budgets(mut self, budgets: BTreeMap<NodeId, u64>) -> Self {
+        self.escrow = Escrow::new(budgets);
+        self
     }
 
     /// This node's own signed chain.
@@ -217,6 +242,24 @@ impl State {
     /// beyond `BTreeMap`'s own (ascending by `(origin, seq)`).
     pub fn buffer_keys(&self) -> impl Iterator<Item = (NodeId, u64)> + '_ {
         self.buffer.keys().copied()
+    }
+
+    /// Every equivocation this node has independently verified proof of,
+    /// ascending by the accused `NodeId` (`docs/spec.md` §11, M4).
+    pub fn poes(&self) -> impl Iterator<Item = &Poe> + '_ {
+        self.poes.values()
+    }
+
+    /// Whether this node holds a verified proof accusing `node`.
+    pub fn is_proven_faulty(&self, node: NodeId) -> bool {
+        self.poes.contains_key(&node)
+    }
+
+    /// The escrow counter as this node has derived it (`docs/spec.md` §13,
+    /// M5). Two nodes holding the same entry set hold an identical one — that
+    /// is invariant I3 and I4 together.
+    pub fn escrow(&self) -> &Escrow {
+        &self.escrow
     }
 
     /// Every entry this node has applied — its own log plus everything
@@ -251,6 +294,48 @@ fn already_known(state: &State, node: NodeId, seq: u64) -> bool {
     state.causal_vv.highest(node).is_some_and(|k| k >= seq)
 }
 
+/// The entry this node holds at `(node, seq)`, wherever it currently lives:
+/// its own log, an already-applied origin, or the not-yet-satisfied causal
+/// buffer (`docs/spec.md` §11, M4). Equivocation detection must see all
+/// three, since a conflicting entry can arrive while the first copy is still
+/// sitting unapplied in the buffer.
+fn held_at(state: &State, node: NodeId, seq: u64) -> Option<wire::Entry> {
+    if node == state.me {
+        return state.log.entries().get(seq as usize).cloned();
+    }
+    if let Some(e) = state
+        .origins
+        .get(&node)
+        .and_then(|v| v.get(seq as usize))
+        .map(VerifiedEntry::entry)
+    {
+        return Some(e.clone());
+    }
+    state.buffer.get(&(node, seq)).map(|b| b.entry.clone())
+}
+
+/// Checks an incoming entry against whatever this node already holds at the
+/// same `(node, seq)`. If the two conflict and both are validly signed under
+/// the roster, records a proof — self-verifying, needing nothing beyond the
+/// roster (`DESIGN.md` §4.4, `docs/spec.md` §11).
+///
+/// Only the first proof per accused node is kept: one is already sufficient,
+/// and keeping more would grow `poes` without bound over a long run.
+fn detect_equivocation(state: &mut State, incoming: &wire::Entry) {
+    if state.poes.contains_key(&incoming.node) {
+        return;
+    }
+    let Some(existing) = held_at(state, incoming.node, incoming.seq) else {
+        return;
+    };
+    let Some(poe) = Poe::new(existing, incoming.clone()) else {
+        return;
+    };
+    if verify_poe(&state.roster, &poe).is_ok() {
+        state.poes.insert(poe.node(), poe);
+    }
+}
+
 /// Verifies and applies an entry whose `deps` are already satisfied.
 /// Returns whether it was applied. A verification failure is dropped
 /// silently — defensive only; the honest M2 simulator never triggers it
@@ -262,6 +347,7 @@ fn attempt_apply(state: &mut State, entry: wire::Entry) -> bool {
         Ok(verified) => {
             state.causal_vv.bump(entry.node, entry.seq);
             state.claims.observe(&verified);
+            state.escrow.observe(&verified);
             state.origins.entry(entry.node).or_default().push(verified);
             true
         }
@@ -286,46 +372,15 @@ fn next_task(state: &State) -> TaskId {
         .count() as TaskId
 }
 
-/// Appends `body` to this node's own chain, folds it into the node's own
-/// derived state, and broadcasts it to every peer ascending by `NodeId` (R4).
-///
-/// A full log is a silent no-op (`docs/spec.md` §8.4 refuses rather than
-/// evicts): graceful degradation, not a crash.
-fn author(state: &mut State, body: Body, effects: &mut Vec<Effect>) {
-    // `deps` is the causal snapshot taken *before* the append, and the
-    // node's own component is bumped *after* it — `docs/spec.md` §9.2.
-    let deps = state.causal_vv.clone();
-    let entry = match state.log.append(body, deps) {
-        Ok(appended) => appended.clone(),
-        Err(_) => return,
-    };
-    state.causal_vv.bump(state.me, entry.seq);
-
-    // Verified by construction: this node has just signed this entry with its
-    // own key, at its own next seq, over its own chain head — every rule
-    // `log::verify_next` checks holds by the way it was built. Wrapping it
-    // here keeps `Claims::observe`'s type gate (`docs/spec.md` §8.3) honest
-    // without a pointless round trip through the verifier.
-    state
-        .claims
-        .observe(&VerifiedEntry::from_verified(entry.clone()));
-
-    for &peer in &state.members {
-        effects.push(Effect::Send {
-            to: peer,
-            payload: Envelope::Entry(entry.clone()),
-        });
-    }
-}
-
 /// Authors a `Withdraw` for every task this node claimed, is not winning, and
 /// has not already withdrawn from — ascending by task id (`docs/spec.md`
 /// §10.6). By §10.5 losing is monotone, so each fires at most once per task.
 ///
 /// "Have I already withdrawn?" is asked of the derived state rather than of
 /// the raw log: the only way `(task, me)` enters `withdrawn` is an entry
-/// authored by `me`, and [`author`] folds those in as it writes them, so the
-/// two readings are the same and this one does not rescan the chain.
+/// authored by `me`, and [`policy::author_and_commit`] folds those in as it
+/// writes them, so the two readings are the same and this one does not rescan
+/// the chain.
 fn author_withdrawals(state: &mut State, effects: &mut Vec<Effect>) {
     let me = state.me;
     let pending: Vec<TaskId> = state
@@ -339,7 +394,7 @@ fn author_withdrawals(state: &mut State, effects: &mut Vec<Effect>) {
         .collect();
 
     for task in pending {
-        author(state, Body::Withdraw { task }, effects);
+        policy::author_and_commit(state, &policy::Withdraw { task }, &(), effects);
     }
 }
 
@@ -421,6 +476,12 @@ pub fn step(state: &State, ev: Event, now: LogicalTime) -> (State, Vec<Effect>) 
             next.recv_count += 1;
             match payload {
                 Envelope::Entry(entry) => {
+                    // Equivocation detection runs before delivery decides what
+                    // to do with the entry: a conflicting copy of an
+                    // already-applied, already-buffered, or brand-new
+                    // `(node, seq)` must be caught in all three cases
+                    // (`docs/spec.md` §11, M4).
+                    detect_equivocation(&mut next, &entry);
                     if already_known(&next, entry.node, entry.seq) {
                         // Duplicate or already superseded — honest re-delivery
                         // (e.g. via anti-entropy) is expected traffic, not an
@@ -439,8 +500,26 @@ pub fn step(state: &State, ev: Event, now: LogicalTime) -> (State, Vec<Effect>) 
                     // each origin — advertise-then-push-reply, one round
                     // trip, no separate request envelope (`docs/spec.md`
                     // §9.5).
+                    //
+                    // `start` overlaps by one with what the peer already
+                    // claims to have (`their_vv.highest`, not `+ 1`): a
+                    // version vector counts entries, it does not identify
+                    // them, so a peer's claimed head is re-sent every round
+                    // rather than only the entries strictly past it. This is
+                    // what lets equivocation be detected across a partition
+                    // heal even when neither side's vector shows a gap
+                    // (`docs/spec.md` §11, M4).
+                    //
+                    // Clamped to `mine`: if the peer's claimed highest for
+                    // `origin` is already past what this node itself holds
+                    // (this node is the one behind, not ahead — exactly a
+                    // victim of equivocation stuck at the fork point while
+                    // the peer has kept advancing past it), `start` must not
+                    // exceed `mine`, or the range is empty and this node's
+                    // own highest entry — the one that might conflict with
+                    // what the peer holds — is never re-offered at all.
                     for (origin, mine) in next.causal_vv.iter() {
-                        let start = their_vv.highest(origin).map_or(0, |s| s + 1);
+                        let start = their_vv.highest(origin).unwrap_or(0).min(mine);
                         for seq in start..=mine {
                             if let Some(e) = entry_at(&next, origin, seq) {
                                 effects.push(Effect::Send {
@@ -460,7 +539,7 @@ pub fn step(state: &State, ev: Event, now: LogicalTime) -> (State, Vec<Effect>) 
             // drain of `docs/spec.md` §9.3. The order within the tick is
             // normative — claim, then withdrawals, then the advertisement.
             if next.entry_period != 0 && now.0.is_multiple_of(next.entry_period) {
-                let claim = Body::TaskClaim {
+                let claim = policy::TaskClaim {
                     task: next_task(&next),
                     // Fixed for autonomously authored claims: nothing in
                     // Phase 1 produces real priorities, and an unused
@@ -468,8 +547,20 @@ pub fn step(state: &State, ev: Event, now: LogicalTime) -> (State, Vec<Effect>) 
                     // (`docs/spec.md` §10.6, §11).
                     priority: 1,
                 };
-                author(&mut next, claim, &mut effects);
+                policy::author_and_commit(&mut next, &claim, &(), &mut effects);
                 author_withdrawals(&mut next, &mut effects);
+                // M5: spend 1 unit per authoring tick while budget remains.
+                // can_spend is a local check — no consensus, no handshake.
+                // The per-node cap is what makes I4 hold even in a partition
+                // (`docs/spec.md` §13).
+                if next.escrow.can_spend(next.me, 1) {
+                    policy::author_and_commit(
+                        &mut next,
+                        &policy::Spend { amount: 1 },
+                        &(),
+                        &mut effects,
+                    );
+                }
             }
             if next.anti_entropy_period != 0 && now.0.is_multiple_of(next.anti_entropy_period) {
                 for &peer in &next.members {

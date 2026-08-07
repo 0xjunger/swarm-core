@@ -47,6 +47,8 @@ fn cfg(seed: u64, loss_permille: u32) -> SimConfig {
             (1, Partition::split(&[&[A, B], &[C]])),
             (101, Partition::connected(&[A, B, C])),
         ],
+        equivocation: None,
+        budget_per_node: 3,
     }
 }
 

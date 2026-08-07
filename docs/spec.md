@@ -3,14 +3,14 @@
 > `DESIGN.md` (Turkish) is the project's source of truth for *what* and *why*.
 > This document is the normative specification for *how*: the exact rules the
 > code implements. Per `DESIGN.md` §11.6, a decision is written here **before**
-> it enters code; per §11.5, a wire-format change updates the golden vectors
+> it enters code; per `DESIGN.md` §11.5, a wire-format change updates the golden vectors
 > (§8.5) and states the reason in the commit message.
 >
 > This is a single living document, organized by topic rather than by
 > milestone. Earlier milestones did not each get a frozen file — a decision
 > made at M2 and refined at M3 is described once, in its current form, in the
-> section that owns the topic. §16 (Roadmap) tracks what is implemented and
-> what is not; §17 (Changelog) is the per-milestone history for anyone who
+> section that owns the topic. §17 (Roadmap) tracks what is implemented and
+> what is not; §18 (Changelog) is the per-milestone history for anyone who
 > needs it. If you are looking for "what did M2 add," read the changelog; if
 > you are looking for "how does causal delivery work today," read §9 — it will
 > not send you chasing three other files to find out.
@@ -19,15 +19,22 @@
 
 ## 1. Status
 
-**Implemented: M0, M1, M2, M3.** Sections below describe the system as it
+**Exit gate:** `scripts/verify.sh` is the one command that decides whether
+Phase 1's exit criteria are met. It runs the full workspace test suite, then
+rebuilds `swarm-core` with the `mutant-i3` negative control
+(`PHASE1-REMEDIATION.md` A2) and requires that build to fail — a checker that
+cannot fail on a deliberately broken build is not a checker. Green on
+`scripts/verify.sh` means the criteria are met; nothing else in this
+document does.
+
+**Implemented: M0, M1, M2, M3, M4, M5.** Sections below describe the system as it
 exists today, not as it was at any past milestone. Where a rule changed shape
 between milestones (e.g. `deps`, invariant I3), only the current shape is
-normative; the change itself is recorded in §17.
+normative; the change itself is recorded in §18.
 
-**Not yet implemented:** M4 (equivocation detection), M5 (escrow / I4), M6
-(property-based invariant checker), and everything in Phase 2+. §16 sketches
-these without freezing decisions that are not yet made — do not treat §16 as
-binding.
+**Not yet implemented:** M6 (property-based invariant checker with `Class` /
+`Action` / policy gate), and everything in Phase 2+. §17 sketches these without
+freezing decisions that are not yet made — do not treat §17 as binding.
 
 ---
 
@@ -39,7 +46,7 @@ rust-toolchain.toml   pinned toolchain — part of the reproducibility claim
 clippy.toml           mechanical enforcement of §3's I/O ban
 DESIGN.md             source of truth (Turkish)
 docs/spec.md           this file
-crates/swarm-core/    no_std, no I/O, minimal dependencies (§15)
+crates/swarm-core/    no_std, no I/O, minimal dependencies (§16)
 crates/swarm-sim/     std; the simulator that drives swarm-core
 ```
 
@@ -48,8 +55,7 @@ only because the workspace root directory is itself named `swarm-core`, and a
 nested `swarm-core/swarm-core/` path is needlessly confusing. The module names
 *inside* `swarm-core` (`wire`, `causal`, `log`, `state`, `policy`, `fault`)
 follow §5 and are created as each milestone needs them; `wire`, `causal`,
-`log`, and `state` exist today (M1–M3). `policy` and `fault` arrive at M5 and
-M4 respectively.
+`log`, `state`, and `fault` exist today (M1–M5). `policy` arrives at M6.
 
 `swarm-verify` and `swarm-net` do not exist yet (M6 and Phase 2 respectively).
 
@@ -142,7 +148,7 @@ wrapper — the public contract does not change. Revisit no earlier than M5.
 There is no wall clock anywhere, at any layer. `DESIGN.md` §7 forbids
 tie-breaking on wall-clock time because GPS time can be spoofed, which would
 let an attacker win claim races (this is exactly why M3's winner rule uses a
-derived logical clock, §11.2). The simulator itself has no access to real
+derived logical clock, `DESIGN.md` §11.2). The simulator itself has no access to real
 time, so a wall-clock dependency cannot be introduced accidentally later
 without deleting code that visibly exists to prevent it.
 
@@ -208,7 +214,7 @@ Every queue is bounded (`DESIGN.md` §7, "memory bound"). On overflow the
 **oldest** message for that destination is dropped and counted. This applies
 to the simulator's network queues (M0) and, by the same rule, to the causal
 buffer (§9.3). No structure in this system is allowed to grow without a
-stated bound — the causal buffer, the claim CRDT (§11.4), and every future
+stated bound — the causal buffer, the claim CRDT (`DESIGN.md` §11.4), and every future
 addition inherit this requirement.
 
 ---
@@ -311,14 +317,16 @@ Canonicality rules:
 
 `TICK`, `SEND`, `ENQUEUE`, `DELIVER`, `DROP_LOSS`, `DROP_PARTITION`,
 `DROP_OVERFLOW`, `PARTITION`, `APPLY`, `BUFFER`, `DROP_CAUSAL_OVERFLOW`,
-`FINAL`.
+`EQUIVOCATION`, `FINAL`.
 
 The first nine exist from M0. `APPLY` (an entry was applied to derived
 state), `BUFFER` (an entry was held pending causal delivery), and
 `DROP_CAUSAL_OVERFLOW` (a buffered entry was evicted, §9.3) were added at M2,
 derived by diffing a node's `State` before and after each `step` call — `step`
 itself stays pure and returns only `Effect`s (§3.3); this diffing is
-simulator bookkeeping, not a change to the core's contract.
+simulator bookkeeping, not a change to the core's contract. `EQUIVOCATION`
+(a node independently verified a proof of equivocation against another,
+§11.3) was added at M4, derived the same way.
 
 ### 7.2 Envelope rendering
 
@@ -412,9 +420,10 @@ variant tag                        (1 byte)
 ```
 
 | Variant | Tag | Fields | Since |
-|---|---|---|---|
+|---|---|---|---|---|
 | `TaskClaim` | `0x00` | `task` (8 bytes, u64 BE) `\|\|` `priority` (1 byte, u8) | M1 |
 | `Withdraw` | `0x01` | `task` (8 bytes, u64 BE) | M3 |
+| `Spend` | `0x02` | `amount` (8 bytes, u64 BE) | M5 |
 
 `priority` was opened at M1 although nothing used it until M3, because M3's
 winner rule needed it and a later addition would have changed the wire
@@ -452,7 +461,7 @@ order, and fails at the first violation, reporting the offending index:
 3. `mission_id` equals the roster's (cross-mission replay rejected).
 4. `epoch` equals the roster's.
 5. `seq` equals the expected value (0, then +1). This is invariant I1
-   (§13): a duplicated `(node, seq)` can never pass.
+   (§14): a duplicated `(node, seq)` can never pass.
 6. `prev` equals the expected link.
 7. The Ed25519 signature verifies (strict verification) against the roster
    key of `node`.
@@ -469,7 +478,7 @@ is crate-private, so any function that must only see verified entries
 declares that in its signature, and forgetting to verify becomes a **compile
 error** rather than a runtime bug (`DESIGN.md`, item 4). Every function that
 folds an entry into derived state — the causal-delivery apply step, `Claims`'
-folding function (§11.3) — takes `VerifiedEntry`, never `Entry`. The one
+folding function (`DESIGN.md` §11.3) — takes `VerifiedEntry`, never `Entry`. The one
 exception is a node's own freshly authored entry: it is verified by
 construction (this node just signed it, over its own chain head, with its own
 key), so it is wrapped through the crate-private constructor rather than
@@ -489,7 +498,7 @@ precisely so old entries can be pruned without losing provability), and the
 MMR is not part of Phase 1. Until then, dropping history would make
 end-to-end verification impossible, so the bound is enforced by refusal.
 
-At every call site that authors an entry (§10.4, §11.6), a full log is a
+At every call site that authors an entry (§10.4, `DESIGN.md` §11.6), a full log is a
 silent no-op — graceful degradation, not a crash. Not exercised at the
 default `log_cap` used by `swarm-sim`.
 
@@ -501,7 +510,7 @@ change to the wire format breaks these tests — **that is the point**: the
 format must never change silently (`DESIGN.md`, item 5). A deliberate change
 updates the golden vectors and states the reason in the commit message.
 
-Three vectors, added as each shape of `Entry` first existed:
+Four vectors, added as each shape of `Entry` first existed:
 
 1. **M1** — `TaskClaim`, empty `deps`. The base case: single-variant body, no
    causal dependencies.
@@ -511,8 +520,10 @@ Three vectors, added as each shape of `Entry` first existed:
 3. **M3** — `Withdraw`. Proves tag `0x01` and its single-field body, and that
    it produces different signed bytes than a `TaskClaim` naming the same task
    (so one signature can never be read as attesting to both).
+4. **M5** — `Spend { amount: 1 }`. Proves tag `0x02` and its single-field body
+   (8 bytes, u64 BE for `amount`).
 
-All three remain byte-identical today. If any of them moves, something has
+All four remain byte-identical today. If any of them moves, something has
 silently altered an already-frozen encoding.
 
 ---
@@ -593,7 +604,7 @@ On `Event::Recv { from, payload: Envelope::Entry(entry) }`:
    verified (§8.3's `verify_next`, against the chain hash of the author's
    last entry already held, or `Hash::ZERO` if this is the first entry from
    that author as seen by this node) and, on success, applied: pushed into
-   `state.origins`, folded into `state.claims` (§11.3), and
+   `state.origins`, folded into `state.claims` (`DESIGN.md` §11.3), and
    `state.causal_vv.bump(entry.node, entry.seq)`. A verification failure is
    dropped silently — defensive only; never triggered by an honest
    transport, since the simulator drops and delays but does not forge
@@ -617,7 +628,7 @@ applying* an entry — never by copying or merging a peer's self-reported
 version vector. This is what keeps I2 true even against a peer that lies
 about what it has seen; `Envelope::AntiEntropy`'s vector is read-only input to
 a gap computation (§9.5), never assigned into `causal_vv` directly. This is
-why `VersionVector::merge()` does not exist (§14).
+why `VersionVector::merge()` does not exist (§15).
 
 ### 9.4 The causal buffer
 
@@ -661,6 +672,22 @@ receiver itself holds, and returns one `Effect::Send` per missing entry,
 ascending by `seq` within each origin. No new envelope kind, no explicit
 "request" step, no batching envelope.
 
+**The range re-sent, and why it overlaps by one.** For each origin, the reply
+covers `their_vv.highest(origin).unwrap_or(0)` through the receiver's own
+highest for that origin, inclusive — not `+ 1`. A version vector counts
+entries; it does not identify them, so a peer's self-reported highest `seq`
+for an origin says nothing about whether the entry the *receiver* holds at
+that exact `seq` is the same entry. Re-sending the peer's own claimed head,
+not just what lies strictly past it, is what lets equivocation (§11) surface
+across a partition heal even when neither side's vector shows a numeric gap —
+both sides already believe they are caught up on that origin, and only
+comparing the actual entries at the shared `seq` reveals otherwise. The upper
+end is clamped to the receiver's own highest: if the peer's claimed highest
+for an origin already exceeds what the receiver holds, the receiver is the
+one behind — exactly the position a victim of equivocation is left in, stuck
+at the fork point while the peer has advanced past it — and the range must
+stay empty rather than negative.
+
 **Decision, stated explicitly.** A request/response/batch protocol
 (advertise → explicit "send me these" → bulk reply) was considered and
 rejected: it needs a third envelope shape and an extra round trip to express
@@ -698,7 +725,8 @@ pub struct State {
     causal_vv: causal::VersionVector,   // self-inclusive, §9.2
     buffer: BTreeMap<(NodeId, u64), BufferedEntry>,        // §9.4
     buffer_cap: usize,
-    claims: state::Claims,                                 // §11.3
+    claims: state::Claims,                                 // §10.3
+    poes: BTreeMap<NodeId, fault::Poe>,                     // §11.3
 }
 ```
 
@@ -739,7 +767,7 @@ replicated state. This section implements the third and hardest — task
 claims, `Map<TaskId, ORSet<Claim>>` with the deterministic winner rule `min by
 (priority, logical_clock, node_id)`. The LWW telemetry register and the
 sensor-track OR-set are not implemented: no milestone's acceptance text names
-them yet (§16).
+them yet (§17).
 
 Before M3, `TaskClaim`'s `task` field was populated with the author's own
 `seq`, so no two nodes ever claimed the same task and there was no contest to
@@ -837,7 +865,7 @@ a `VerifiedEntry`, never an `Entry` (§8.3):
 
 Both are set insertions, so folding is idempotent and commutative: the same
 entry set yields the same `Claims` regardless of arrival order. That is
-invariant I3 (§13) discharged structurally rather than by argument.
+invariant I3 (§14) discharged structurally rather than by argument.
 
 ### 10.4 `Withdraw` does not remove the claim, and why
 
@@ -888,7 +916,7 @@ winner is its minimum, the minimum can only decrease:
 
 Two consequences the implementation depends on: a `Withdraw` is never
 regretted, so a node authors at most one per task, bounding log growth; and
-two nodes that have seen the same entry set agree on the winner (I3, §13),
+two nodes that have seen the same entry set agree on the winner (I3, §14),
 with neither later contradicted by an entry it has not yet seen becoming less
 authoritative.
 
@@ -931,7 +959,216 @@ unused configuration field is exactly what `DESIGN.md` §11.4 forbids. The
 
 ---
 
-## 11. Bandwidth budget
+## 11. Fault detection: proof of equivocation
+
+*A deliberately faulty node; `DESIGN.md` §4.4.*
+
+### 11.1 `Poe`: the proof is the two signatures
+
+```rust
+struct Poe { a: Entry, b: Entry }  // fault module
+```
+
+Two signed entries at the same `(node, seq)` with different content —
+nothing else. `Poe::new(x, y)` returns `None` unless `x.node == y.node`,
+`x.seq == y.seq`, and the two encode to different bytes (§8.2); two
+deliveries of the identical entry are honest re-delivery (§9.3), not a proof
+of anything.
+
+**Canonical ordering.** The two entries are stored as `(a, b)` with
+`a.encoded() <= b.encoded()` lexicographically, regardless of construction
+order. This is what makes independent construction useful: two nodes that
+each hold a different one of the pair first and receive the other later
+build byte-identical `Poe`s, so a proof can be compared for equality or
+deduplicated without re-deriving anything.
+
+### 11.2 Verification: roster alone, no context
+
+```rust
+fn verify_poe(roster: &Roster, poe: &Poe) -> Result<(), PoeError>
+```
+
+Checks, in order: same author, same `seq`, distinct encodings, the accused
+`node` is in `roster`, and both signatures verify under that node's roster
+key (`Entry::signing_bytes`, §8.3). Nothing else is consulted — no log, no
+peer, no simulator state, no agreement from any other node.
+
+This is the property `DESIGN.md` §4.4 names directly: "kanıt kendi kendini
+doğruladığı için suçlu node'u dışlamak konsensüs gerektirmez" (the proof
+verifies itself, so excluding the guilty node needs no consensus). A third
+party holding only the roster's public keys — never having run the
+simulation, never having exchanged anything with either accuser — reaches
+the identical verdict. `swarm-sim/tests/m4_equivocation.rs` exercises exactly
+this: it rebuilds the roster from scratch and verifies a proof produced by
+nodes it otherwise has no relationship to.
+
+A tampered proof fails closed: flipping one bit of either signature turns
+`Ok(())` into `Err(PoeError::BadSignature)`, and an entry claimed to be from
+`node` but actually signed by a different key fails the same way — a peer
+cannot frame an honest node by fabricating a "conflicting" entry, since
+fabricating it requires the victim's own private key.
+
+### 11.3 Detection: at delivery time, against everything held
+
+```rust
+fn held_at(state: &State, node: NodeId, seq: u64) -> Option<Entry>
+fn detect_equivocation(state: &mut State, incoming: &Entry)
+```
+
+On every `Envelope::Entry` receipt, before the causal-delivery decision of
+§9.3 runs, `detect_equivocation` looks up whatever this node already holds at
+the incoming entry's `(node, seq)` — checking, in order, its own log (if
+`node == me`), `origins` (already applied), and the causal buffer (§9.4,
+not yet applied). All three must be checked: a conflicting second copy can
+arrive while the first is still sitting unapplied in the buffer, and missing
+that case would miss a real equivocation.
+
+If something is held and it conflicts with the incoming entry, `Poe::new`
+builds a proof and `verify_poe` checks it against the roster; on success it
+is inserted into `state.poes`, keyed by the accused node. At most one proof
+is kept per accused node — one is already sufficient to exclude that node,
+and keeping more would grow `poes` without the bound every other structure
+in this system is held to (§5.5). Once a node is proven faulty, further
+conflicting entries from it are not re-checked.
+
+`State::poes()` iterates the proofs a node currently holds, ascending by
+accused `NodeId`; `State::is_proven_faulty(node)` is the yes/no form. Both
+are read-only queries — accusing a node changes nothing about how its
+*other*, non-conflicting entries are delivered or applied; `DESIGN.md` §4.4
+is explicit that this is accountability, not exclusion enforced by the
+protocol itself.
+
+### 11.4 Why anti-entropy had to change
+
+Detection depends entirely on two conflicting entries eventually reaching
+the same node. §9.5's fill-reply range is the mechanism that makes this
+happen across a partition heal, and it needed the overlap-by-one clamp
+described there: without it, a receiver whose version vector already shows
+it as "caught up" on the equivocator's genesis entry would never be re-sent
+a copy to compare against its own, and the two forged genesis entries could
+sit on either side of a healed partition forever, each side believing it
+had nothing left to exchange.
+
+### 11.5 Honest limits, restated from `DESIGN.md` §4.4
+
+- **Post-hoc, not preventive.** A node eclipsed into never meeting the other
+  partition never triggers detection — nothing here bounds how long an
+  equivocation can go unproven, only that it will be proven once both
+  conflicting copies reach one node.
+- **Consistency, not truth.** The hash chain and signatures prove a node said
+  two inconsistent things; they say nothing about whether either one was
+  accurate. Sensor accuracy is a different problem, out of scope for this
+  layer.
+
+### 11.6 The simulator's faulty node
+
+`SimConfig::equivocation: Option<Equivocation>` names one node and a set of
+victim nodes. At the moment that node would broadcast its genesis entry
+(`seq = 0`, the only entry `swarm-sim`'s scenarios forge — once a victim
+holds it, the equivocator's later entries fail ordinary chain verification,
+`BadPrevLink`, §8.3, at that victim, so no further forging is needed to keep
+the two sides apart), the simulator substitutes a different, validly
+re-signed body per victim rather than the one real entry every other peer
+receives.
+
+This is deliberately narrow: substitution only happens for effects produced
+while authoring (`Event::Tick`), never for effects produced while relaying
+(`Event::Recv`, e.g. an anti-entropy push reply) — a relay must always pass
+through whatever is actually stored, honest or forged, or a victim could
+never receive the genuine article from anyone, including the equivocator's
+own later, honest replies about its own log. This keeps the channel itself
+honest, per §15's "Byzantine transport" boundary: the simulator still only
+drops and delays; the forging happens *as* the faulty node, at the protocol
+layer, not *as* the network.
+
+`build_roster` (used internally to construct every node's `State`) is public
+for the same reason `verify_poe` needs only a roster: a test proving that a
+third party can verify unilaterally has to be able to build that third
+party's roster without also spinning up a simulation.
+
+---
+
+## 12. Escrow counter (`DESIGN.md` §M5)
+
+The question "what if communication goes down entirely?" is answered by the
+escrow counter, not by consensus. Each node is allocated a fixed budget at
+mission start; within its own allocation it spends freely, without asking any
+peer. Budget transfers (which would require a handshake) are not in M5's scope
+and are deferred to Phase 2.
+
+### 12.1 `Body::Spend`
+
+`Body::Spend { amount: u64 }` records a node's expenditure. Tag `0x02`, encoding
+length 9 bytes (tag + 8-byte big-endian amount). The body is a record — it does
+not alter the `Claims` CRDT (§10), and the `Claims::observe` path is a no-op
+when a `Spend` arrives.
+
+### 12.2 `Escrow` structure
+
+`Escrow { allocations: BTreeMap<NodeId, u64>, spent: BTreeMap<NodeId, u64> }`
+
+- `allocations` is immutable once set (via `State::with_budgets`). It gives
+  each node its spending ceiling.
+- `spent` is cumulative: every applied `Spend` entry increments
+  `spent[author]` by `amount`. The increment is `saturating_add`, so the
+  counter cannot overflow.
+- `remaining(node) = allocations[node] - spent[node]`, saturating at 0. A
+  node absent from `allocations` has zero remaining.
+- `can_spend(node, amount) = remaining(node) >= amount`.
+
+### 12.3 Observation and authoring
+
+Folding follows the same pattern as `Claims::observe` (§10.3): `Escrow::observe`
+is called from `attempt_apply` (every received entry) and from `author` (self-
+authored entries). Both paths feed only `VerifiedEntry`, so an unverified Spend
+can never increase the counter.
+
+On `Event::Tick`, after the existing task claim and withdrawal logic, the node
+checks `escrow.can_spend(me, 1)`. If true, it authors `Body::Spend { amount: 1 }`
+and broadcasts it. The spend rate is 1 unit per `entry_period` tick; when the
+node's remaining budget reaches zero, authoring stops.
+
+### 12.4 Invariant I4
+
+> "tüm partisyonlardaki harcanabilir hakların toplamı ≤ yetkilendirilen toplam"
+
+I4 holds **structurally**, not by consensus:
+
+1. Each node `n` has a locally enforced per-entry cap: it cannot author
+   `Spend { amount: x }` unless `remaining(n) >= x`.
+2. The sum of per-node caps bounds the global sum: `Σ spent(n) ≤ Σ
+   allocations(n)` for every `n`.
+3. A partition cannot circumvent this, because the only node that can spend
+   `n`'s budget is `n` itself — and `n` always carries its full history (its
+   own chain includes every Spend it has authored). Even if no peer sees the
+   spends, `n`'s own local cap stops it.
+
+Budget *transfers* would require a two-round handshake and are not in M5's
+scope; when they arrive, per-node caps will be the safety net that keeps I4
+true while the handshake is re-proposed after partition heal.
+
+### 12.5 Testing
+
+- **Unit.** `swarm-core/tests/invariants.rs` — I4 via `step`: a node with
+  budget 3 spends 3 and then stops; an observer tracking another node's Spend
+  entries sees the correct remaining; total unique Spend across all origins
+  never exceeds total allocation.
+- **Integration.** `swarm-sim/tests/m5_escrow.rs` — 1000 seeds with random
+  message loss, 200 seeds with partition + loss. At each seed, the union over
+  every node's knowledge is checked: `Σ unique Spend amounts ≤ N ×
+  budget_per_node`. The test includes a deliberate-bug case that fabricates
+  Spending beyond budget and calls `swarm-verify::check_invariants` directly
+  on the resulting state, asserting it reports an I4 violation — so the
+  positive tests are not vacuously passing. The same fabricated-overspend
+  scenario is also `swarm-verify/tests/i4_negative.rs`'s own regression test
+  (`PHASE1-REMEDIATION.md` A1): `check_i4` used to reconstruct each node's
+  budget from the state being checked rather than take it as a parameter,
+  which made the comparison a tautology that could not fail. `check_invariants`
+  now takes `budgets: &BTreeMap<NodeId, u64>` explicitly.
+
+---
+
+## 13. Bandwidth budget
 
 *Per `DESIGN.md` §7's "baştan hesapla" requirement.*
 
@@ -944,6 +1181,8 @@ Entry (TaskClaim) = 14 (tag) + 32 (mission) + 4 (epoch) + 1 (node) + 8 (seq)
                    = 165 + 9·D bytes
 Entry (Withdraw)   = same, but body is 9 B (1 tag + 8 task) instead of 10
                    = 164 + 9·D bytes
+Entry (Spend)      = same, but body is 9 B (1 tag + 8 amount)
+                   = 164 + 9·D bytes
 VersionVector      = 2 + 9·N bytes   (N = roster size)
 ```
 
@@ -953,12 +1192,14 @@ At the roster cap `N ≤ 20` (`DESIGN.md` §4.5): `AntiEntropy` ≤ 182 B, `Entr
 (§5.5) rather than an explicit per-round cap.
 
 M3 roughly doubled the steady-state entry rate: a node may now emit one claim
-*and* one withdrawal per `entry_period` instead of one claim. Still
-self-limited by the same bounded queue; no new cap was introduced.
+*and* one withdrawal per `entry_period` instead of one claim. M5 adds a Spend
+entry per period while budget remains, so the peak authoring rate per period is
+1 claim + 1 withdrawal + 1 Spend = 3 entries. The network queue (§5.5) and
+per-node log cap (§8.4) still bound all three.
 
 ---
 
-## 12. Trace and simulator internals
+## 14. Trace and simulator internals
 
 Covered by §7 (format) and §6 (the loop). Nothing in this section is separate
 from those; listed here only as a pointer for anyone looking for "where is
@@ -966,7 +1207,7 @@ the simulator specified" — the answer is §5–§7, not a separate document.
 
 ---
 
-## 13. Invariants
+## 15. Invariants
 
 Per `DESIGN.md` §11.7, invariants are written before the code that guards
 them. This table reflects the current, cumulative status — not a per-milestone
@@ -974,16 +1215,25 @@ snapshot.
 
 | # | Invariant | Status |
 |---|---|---|
-| **I1** | At most one signed entry per `(node, seq)` | **Binding.** Enforced by construction (`seq` = chain length, §8.3) and by verification (§8.3 rule 5 rejects duplicates). Tested in `swarm-core/tests/invariants.rs`. |
-| **I2** | An entry is not applied before its `deps` are delivered | **Binding.** §9.3's delivery rule is the enforcement; tested in `swarm-core/tests/causal.rs` (buffering, cross-node deps) and `swarm-core/tests/invariants.rs`. |
-| **I3** | Two nodes that have seen the same entry set derive the same state | **Binding, and strengthened at M3.** "Derived state" now means `causal_vv`, the entry set, `claims`, **and `winner(t)` for every task `t`** — not just the version vector. Discharged structurally by §10.3 (set insertion is commutative and idempotent) and §10.5 (losing is monotone); tested in `swarm-core/tests/invariants.rs` and end to end by `swarm-sim/tests/m2_convergence.rs` and `swarm-sim/tests/m3_claim.rs`. |
-| I4 | Spendable rights across all partitions ≤ authorised total | Not yet implemented — activates at M5 (escrow). |
-| I5 | No safety-critical effect without a valid certificate in the log | Not yet implemented — activates with the policy gate (M5). |
-| I6 | Every effect is traceable to a signed entry chain | Partially discharged: entries cause `Effect::Send`s directly, and a withdrawal is traceable to the claims that caused it. The full policy-gated claim is M5+. |
+| **I1** | At most one signed entry per `(node, seq)` | **Binding.** Enforced by construction (`seq` = chain length, §8.3) and by verification (§8.3 rule 5 rejects duplicates). Tested in `swarm-core/tests/invariants.rs`, and executable-checked by `swarm-verify::check_invariants` across 5000 random seeds (`swarm-sim/tests/m6_property.rs`). |
+| **I2** | An entry is not applied before its `deps` are delivered | **Binding.** §9.3's delivery rule is the enforcement; tested in `swarm-core/tests/causal.rs` (buffering, cross-node deps) and `swarm-core/tests/invariants.rs`, and executable-checked by `swarm-verify::check_invariants` across 5000 random seeds. |
+| **I3** | Two nodes that have seen the same entry set derive the same state | **Binding, and strengthened at M3.** "Derived state" now means `causal_vv`, the entry set, `claims`, **and `winner(t)` for every task `t`** — not just the version vector. Discharged structurally by §10.3 (set insertion is commutative and idempotent) and §10.5 (losing is monotone); tested in `swarm-core/tests/invariants.rs` and end to end by `swarm-sim/tests/m2_convergence.rs` and `swarm-sim/tests/m3_claim.rs`. Executable-checked by `swarm-verify::check_invariants` across 5000 random seeds; the checker's negative control is a `mutant-i3` cargo feature that breaks the tie-break to prefer the observing node's own claim — the same test run against that build reports a real I3 violation (`PHASE1-REMEDIATION.md` A2). |
+| I4 | Spendable rights across all partitions ≤ authorised total | **Binding.** Discharged structurally (§12.4): each node's spending is locally capped, so the global sum is bounded by the sum of per-node caps — no consensus required. Tested in `swarm-core/tests/invariants.rs` (unit), end to end by `swarm-sim/tests/m5_escrow.rs` (1000 seeds with random loss, plus a fabricated-overspend negative control that calls `swarm-verify::check_invariants` directly), and executable-checked across 5000 random seeds by `swarm-verify::check_invariants`. |
+| I5 | No safety-critical effect without a valid certificate in the log | **Binding, structural — not an executable check.** The `Action` trait does not tie `Cert` to `Class` at the type level — nothing stops a future type from implementing `Action` with `CLASS = SafetyCritical` and `Cert = ()`. What actually holds today is narrower and still real: no type in this crate implements `Action` with `CLASS = SafetyCritical` at all, so `commit` can never be called on one — proven by the `compile_fail` doctest on `policy::SafetyCriticalAction`. `swarm-verify::check_invariants` does not check I5; there is nothing at runtime to check. |
+| I6 | Every effect is traceable to a signed entry chain | **Binding, structural — not an executable check.** [`policy::author_and_commit`] is the single path through which any `Effect::Send` is created, and it always writes to the log first — a code-structure fact verifiable by reading `policy.rs`, not a property `swarm-verify::check_invariants` runs a check for. |
+
+I1 is what M4's proof of equivocation ultimately makes *accountable* rather
+than merely enforced: verification (§8.3 rule 5) already refuses to apply a
+second signed entry at a taken `(node, seq)` locally, but a node signing two
+different entries and sending one to each side of a partition is a violation
+no single receiver's local check can see by itself. §11's `Poe` is the
+cross-node witness — proof that I1 was violated by a specific node,
+verifiable by anyone holding the roster. Tested in
+`swarm-sim/tests/m4_equivocation.rs`.
 
 ---
 
-## 14. Deferred
+## 16. Deferred
 
 Recorded so these are not silently decided by implementation accident. Each
 is a real decision that was considered and consciously not made — not an
@@ -1019,21 +1269,23 @@ oversight.
   Phase 1's `TaskId` is deliberately abstract.
 - **Per-link RNG streams.** The simulator uses one global stream, so activity
   on one link perturbs draws on every other. Traces stay deterministic but
-  are fragile — adding a message anywhere shifts everything after it. If this
-  becomes painful when debugging M4–M6, switch to a per-link stream derived
-  from `seed ⊕ H(src, dst)`. Not needed yet.
+  are fragile — adding a message anywhere shifts everything after it. Turned
+  out not to be needed through M4; if it becomes painful debugging M5–M6,
+  switch to a per-link stream derived from `seed ⊕ H(src, dst)`.
 - **Message duplication as a simulator feature.** Not modelled directly.
   Anti-entropy already produces duplicates naturally, which is the more
   realistic source; revisit only if that proves insufficient.
 - **Byzantine transport.** M4's cheating node lies at the *protocol* layer,
-  not the channel layer. The simulator stays honest: it drops and delays, it
-  does not forge.
+  not the channel layer (§11.6). The simulator stays honest: it drops and
+  delays, it does not forge.
+- **A cap on `State::poes`.** Bounded by roster size already — at most one
+  proof per accused node (§11.3) — so no separate cap was added.
 - **Roster changes mid-run.** Out of scope for all of Phase 1 (`DESIGN.md`
   §7).
 
 ---
 
-## 15. Dependencies
+## 17. Dependencies
 
 ```
 swarm-core:  blake3, ed25519-dalek (default-features = false, alloc feature)
@@ -1062,37 +1314,40 @@ and would force async throughout.
 
 ---
 
-## 16. Roadmap
+## 18. Roadmap
 
 *Not yet binding.* This section exists so "what comes next" is answered in
 the same document as "what exists today," per the goal of this consolidation.
 It restates `DESIGN.md` §9's acceptance criteria for context; it does not
 make any of the implementation decisions those milestones will need — those
 get written here, in the relevant section above, when each milestone starts,
-exactly as M1–M3 did.
+exactly as M1–M4 did.
 
-**M4 — Equivocation detector.** A deliberately faulty node signs two
-different entries at the same `(node, seq)` and sends one to each side of a
-partition. On reunion, any node holding both signed entries can produce a
-~200-byte proof-of-equivocation that a third node, with no other context,
-verifies unilaterally. Adds `fault/` (`DESIGN.md` §5). This is where the
-"Byzantine transport" boundary in §14 gets exercised for the first time — the
-simulator still does not forge messages; the faulty *node* does, at the
-protocol layer.
+**M5 — Escrow counter and I4.** ✅ **Done.** Each node is granted a fixed,
+pre-authorized spending budget (3 units per node, per `DESIGN.md` §M5). A node
+spends 1 unit per `entry_period` tick while its budget remains, authoring
+`Body::Spend { amount: 1 }`. The escrow counter folds every applied Spend entry
+into a cumulative `spent` map; `remaining(node)` is budget minus spent. I4
+holds structurally: each node's per-entry cap bounds its own spending, so the
+global sum is bounded by the sum of per-node allocations — no consensus, no
+quorum. Tested under random partitions and message loss across 1000 seeds.
+Budget transfers, the `policy/` module, and I5/I6 are deferred to M6.
 
-**M5 — Escrow counter and I4.** Each node is granted a fixed, pre-authorized
-spending budget it can spend without coordination. Under randomized
-partition/merge churn across 1000+ seeds, total spend never exceeds the
-authorized total. Activates I4 and I5, and introduces `policy/`
-(`Action`/`Class`/`commit` from `DESIGN.md` §4.5). This is also where the
-`step` cloning cost (§3.3) gets revisited if it has become a real cost, per
-the note there.
-
-**M6 — Invariant checker and property tests.** I1–I6 become executable
-checks run across thousands of seeds with `proptest`; a deliberately broken
-variant (e.g. tie-break on `NodeId` replaced with something non-deterministic)
-must fail the suite, so the green baseline is proven to catch something.
-`swarm-verify` is created here.
+**M6 — Invariant checker and property tests.** ✅ **Done.** I1–I4 are
+executable checks (`swarm-verify::check_invariants`), run across 5000 random
+seeds with `proptest` — zero violations. I5 and I6 are not executable checks;
+they are structurally discharged by the `policy/` module (`Action`/`Class`/
+`commit` from `DESIGN.md` §4.5): `commit()` is the single path to effect
+creation (I6), and no type in the crate implements `Action` with `CLASS =
+SafetyCritical` (I5) — `SafetyCriticalAction`'s `compile_fail` doctest is the
+concrete proof. `swarm-verify` crate provides an independent invariant checker
+(`check_invariants`) usable from any test or tool. A `mutant-i3` build —
+a cargo feature, off by default, that makes `Claims::winner` prefer the
+observing node's own claim — makes the checker report a real I3 violation
+where the clean build reports none; `scripts/verify.sh` runs both directions
+and requires the mutant one to fail (`PHASE1-REMEDIATION.md` A2, A5). The
+`step` cloning cost (§3.3) was revisited and remains acceptable — Phase 4's
+folding scheme depends on the pure signature.
 
 After M6, Phase 1's exit criteria (`DESIGN.md`, "Faz 1 çıkış kriteri") are:
 thousands of seeds, zero invariant violations, and a failing run on a
@@ -1102,7 +1357,7 @@ written.
 
 ---
 
-## 17. Changelog
+## 19. Changelog
 
 | Milestone | Change |
 |---|---|
@@ -1111,3 +1366,6 @@ written.
 | M2 | `Envelope` (`Entry \| AntiEntropy`) replaces the M0 placeholder payload; self-inclusive `deps` population; causal delivery with fixed-point buffer drain; bounded causal buffer with drop-oldest eviction; advertise-then-push-reply anti-entropy; `State` gains `log`, `origins`, `causal_vv`, `buffer`; I2 and I3 promoted to binding. |
 | M3 | `Body::Withdraw`; `logical_clock` derived from `deps`; `state` module with `Map<TaskId, ORSet<Claim>>` and the `min by (priority, lc, node, seq)` winner rule; grow-only claim set with withdrawal as a log record, not a set removal; tick-phase-only authoring with claim → withdraw → advertise ordering; `State` gains `claims`; I3 strengthened to cover derived CRDT state; third golden vector; entry bodies rendered in the trace. |
 | — | Cleanup pass (post-M3, pre-M4): four per-milestone spec files consolidated into this single topic-organized document; removed two unused public methods (`State::origins()`, `Entry::verify_signature()`) that had no call site outside their own tests. |
+| M4 | `fault` module: `Poe` (proof of equivocation) and `verify_poe`, self-verifying against the roster alone; `State` gains `poes` and the `detect_equivocation` check run on every entry receipt against the log, `origins`, and the causal buffer; anti-entropy's fill-reply range changed to overlap by one with the peer's claimed head, clamped to this node's own highest, so a numeric-gap-free fork still surfaces; `swarm-sim` gains `SimConfig::equivocation` and the `Equivocation` scenario type; trace gains the `EQUIVOCATION` record. |
+| M5 | `Body::Spend { amount: u64 }`, tag `0x02`; `Escrow` struct (`allocations` + cumulative `spent`) in `state` module; `State` gains `escrow` with `with_budgets` builder; spending logic in `Event::Tick` — 1 unit per `entry_period` while budget remains; `Escrow::observe` folds Spend entries in `attempt_apply` and `author`; I4 discharged structurally (per-node caps bound the global sum); fourth golden vector; `SimConfig` gains `budget_per_node` (default 3); integration test `m5_escrow.rs` with 1000 random-loss seeds + 200 partition+loss seeds + deliberate-overspend negative test. |
+| M6 | `policy` module: `Class` enum (`Degradable`, `ExclusiveCostly`, `SafetyCritical`), `Action` trait (`CLASS`, `Cert`, `body`), `commit()` gate — the single path through which entries produce effects (I6); concrete Phase 1 actions (`TaskClaim`, `Withdraw`, `Spend`) all `Degradable` with `Cert = ()`; `SafetyCriticalAction` defined but not `Action` in Phase 1 — I5 structurally discharged because no `Action` impl has `CLASS = SafetyCritical` at all (not because `Cert` is type-tied to `Class`; nothing enforces that), proven by a `compile_fail` doctest. `author()` removed; all authorship and effect emission now goes through `policy::author_and_commit`. `swarm-verify` crate: independent `check_invariants(states, budgets) -> Vec<Violation>` checking I1–I4 (I5/I6 are structural, not executable-checked); added to workspace members. `proptest` integration: `swarm-sim/tests/m6_property.rs` runs 5000 random seeds with loss, checking invariants via `swarm-verify`; a `mutant-i3` cargo feature (off by default) breaks `Claims::winner`'s tie-break, and the same test run against that build reports a real I3 violation — `scripts/verify.sh` runs both directions. I5/I6 promoted to binding (structural) in invariants table. |

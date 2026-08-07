@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc b7e9cb88c634d883866740fa6c399e81b1bcf3adcdab880f7d70d48b9991d7b7 # shrinks to cfg = SimConfig { nodes: 2, seed: 12648182, ticks: 100, loss_permille: 200, delay_min: 1, delay_max: 3, queue_cap: 64, entry_period: 10, anti_entropy_period: 15, log_cap: 1000, buffer_cap: 32, partitions: [], equivocation: None, budget_per_node: 3 }

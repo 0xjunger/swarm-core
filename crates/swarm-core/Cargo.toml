@@ -16,3 +16,11 @@ ed25519-dalek = { workspace = true, features = ["alloc"] }
 
 [dev-dependencies]
 ed25519-dalek = { workspace = true, features = ["alloc"] }
+
+[features]
+# Off by default, never enabled in a normal build. Deliberately breaks the
+# task-claim tie-break so it depends on observation order instead of the
+# entry set alone — the negative control for I3 (Task A2 of
+# PHASE1-REMEDIATION.md). Exists only so `scripts/verify.sh` can prove the
+# checker catches a real divergence.
+mutant-i3 = []

@@ -277,3 +277,66 @@ fn a_claim_and_a_withdrawal_for_one_task_sign_different_bytes() {
     assert_ne!(claim.signing_bytes(), withdraw.signing_bytes());
     assert_ne!(claim.sig, withdraw.sig);
 }
+
+// ---------------------------------------------------------------------------
+// M5: a fourth golden vector for the `Spend` body (`docs/spec.md` §8.5).
+// Every `Body` variant arrives with a test (`DESIGN.md` §11.4). The three
+// vectors above must stay byte-identical — a new enum variant adds a tag, it
+// never rewrites an existing encoding.
+// ---------------------------------------------------------------------------
+
+fn golden_entry_spend() -> Entry {
+    let key = SigningKey::from_bytes(&GOLDEN_KEY);
+    UnsignedEntry {
+        mission_id: PHASE1_MISSION_ID,
+        epoch: PHASE1_EPOCH,
+        node: NodeId(1),
+        seq: 0,
+        prev: Hash::ZERO,
+        deps: VersionVector::new(),
+        body: Body::Spend { amount: 1 },
+    }
+    .sign(&key)
+}
+
+/// Computed independently from the spec layout: tag || mission_id || epoch ||
+/// node || seq || prev || deps (empty) || Spend{amount: 1}. The body segment
+/// is `02` (tag, `docs/spec.md` §8.2) followed by `0000000000000001` — eight
+/// big-endian bytes for amount.
+const GOLDEN_SIGNING_HEX_SPEND: &str = "535741524d5f454e5452595f5631\
+    0000000000000000000000000000000000000000000000000000000000000000\
+    00000000\
+    01\
+    0000000000000000\
+    0000000000000000000000000000000000000000000000000000000000000000\
+    0000\
+    02\
+    0000000000000001";
+
+const GOLDEN_ENCODED_HEX_SPEND: &str = "535741524d5f454e5452595f5631\
+    0000000000000000000000000000000000000000000000000000000000000000\
+    00000000\
+    01\
+    0000000000000000\
+    0000000000000000000000000000000000000000000000000000000000000000\
+    0000\
+    02\
+    0000000000000001\
+    ba4625d6b6e4ecae99b9b678e650b9c66fe63c785c3e7eda2f90c74f2165b651\
+    9d7b9119dff817a2937ac578b763c1a944ff26a5f297603cbc5d2c94683a6708";
+
+#[test]
+fn golden_vector_pins_the_spend_body() {
+    let e = golden_entry_spend();
+
+    assert_eq!(
+        hex(&e.signing_bytes()),
+        GOLDEN_SIGNING_HEX_SPEND,
+        "the Spend encoding changed — if deliberate, update this file and \
+         state the reason in the commit message (DESIGN.md §11.5)"
+    );
+    assert_eq!(hex(&e.encoded()), GOLDEN_ENCODED_HEX_SPEND);
+
+    let vk = SigningKey::from_bytes(&GOLDEN_KEY).verifying_key();
+    assert!(vk.verify_strict(&e.signing_bytes(), &e.sig).is_ok());
+}
