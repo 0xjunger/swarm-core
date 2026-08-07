@@ -29,7 +29,7 @@ fn cfg(seed: u64, loss_permille: u32) -> SimConfig {
         seed,
         // `entry_period: 40` also matters for a reason M2 did not have: a
         // node can only withdraw on an `entry_period` tick
-        // (`docs/spec-m3.md` §6), so the tail must hold the *whole* losing
+        // (`docs/spec.md` §10.6), so the tail must hold the *whole* losing
         // sequence — heal, rival claim arrives, next period authors the
         // withdrawal, withdrawal propagates. Healing at 101 with authoring
         // ticks at 120 and a 30-tick quiet tail leaves room for exactly
@@ -73,8 +73,8 @@ fn claimed(state: &State, task: TaskId) -> bool {
 /// Clause 1: "her iki node da aynı kazananı hesaplıyor."
 ///
 /// Not "a winner exists" — every node names the *same* one, for every task
-/// any of them knows about. This is invariant I3 at M3 (`docs/spec-m3.md`
-/// §9) observed end to end.
+/// any of them knows about. This is invariant I3 at M3 (`docs/spec.md`
+/// §13) observed end to end.
 #[test]
 fn every_node_computes_the_same_winner_for_every_task() {
     let (_, states) = run_with_states(&cfg(7, 0));
@@ -135,7 +135,7 @@ fn exactly_one_node_believes_it_won_each_contested_task() {
 /// must *not* withdraw.
 ///
 /// Task 0 is the one both partitions claim: every node's first claim is task
-/// 0 (`docs/spec-m3.md` §6), and the first authoring tick is 40, well inside
+/// 0 (`docs/spec.md` §10.6), and the first authoring tick is 40, well inside
 /// the partition. So this is a genuine concurrent contest across the split,
 /// which is what `DESIGN.md` asks for.
 #[test]
@@ -213,7 +213,7 @@ fn the_criterion_holds_under_loss_across_seeds() {
 }
 
 /// A node never withdraws from a task it did not claim, and never withdraws
-/// twice from the same one (`docs/spec-m3.md` §5.1: losing is monotone).
+/// twice from the same one (`docs/spec.md` §10.5: losing is monotone).
 #[test]
 fn withdrawals_are_at_most_one_per_claimed_task() {
     let (_, states) = run_with_states(&cfg(3, 200));

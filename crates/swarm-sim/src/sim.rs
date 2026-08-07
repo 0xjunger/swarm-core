@@ -34,14 +34,14 @@ pub struct SimConfig {
     pub delay_max: u64,
     pub queue_cap: usize,
     /// A node creates and broadcasts a new entry when `tick % entry_period
-    /// == 0` (`docs/spec-m2.md` §6). Replaces M0/M1's `beacon_period`.
+    /// == 0` (`docs/spec.md` §9.5). Replaces M0/M1's `beacon_period`.
     pub entry_period: u64,
     /// A node advertises its version vector when `tick % anti_entropy_period
-    /// == 0` (`docs/spec-m2.md` §6).
+    /// == 0` (`docs/spec.md` §9.5).
     pub anti_entropy_period: u64,
-    /// Bound on each node's own hash chain (`docs/spec-m1.md` §6).
+    /// Bound on each node's own hash chain (`docs/spec.md` §8.4).
     pub log_cap: usize,
-    /// Bound on each node's causal buffer (`docs/spec-m2.md` §5).
+    /// Bound on each node's causal buffer (`docs/spec.md` §9.4).
     pub buffer_cap: usize,
     /// Scripted partition changes, applied at the top of the named tick. M5's
     /// randomised churn will be a seeded *generator of this same script*; the loop
@@ -101,7 +101,7 @@ pub fn run(cfg: &SimConfig) -> Trace {
 /// Runs a simulation to completion and returns its trace *and* every node's
 /// final `State` — the M2 acceptance test and the `converge` example need to
 /// inspect each node's entries and version vector directly, not just the
-/// trace (`docs/spec-m2.md` §7).
+/// trace (`docs/spec.md` §9.6).
 pub fn run_with_states(cfg: &SimConfig) -> (Trace, BTreeMap<NodeId, State>) {
     // R1. Without this an effect produced during tick N could be delivered during
     // tick N, and the resulting order would depend on iteration sequence rather
@@ -213,10 +213,10 @@ pub fn run_with_states(cfg: &SimConfig) -> (Trace, BTreeMap<NodeId, State>) {
 }
 
 /// Derives `Apply`/`Buffer`/`DropCausalOverflow` trace records by diffing a
-/// node's `State` before and after one `step` call (`docs/spec-m2.md` §7).
+/// node's `State` before and after one `step` call (`docs/spec.md` §9.6).
 /// `step` itself stays pure and returns only `Effect`s — this is bookkeeping
 /// the simulator does on the side, not a change to the core's contract
-/// (`docs/spec.md` §3.2).
+/// (`docs/spec.md` §3.3).
 fn trace_state_diff(trace: &mut Trace, node: NodeId, tick: u64, old: &State, new: &State) {
     // Every entry newly reflected in `causal_vv`, ascending by origin (R4)
     // then by seq — covers direct application and buffer-drain alike, since
@@ -247,7 +247,7 @@ fn trace_state_diff(trace: &mut Trace, node: NodeId, tick: u64, old: &State, new
         });
     }
     // A key that left the buffer without being applied this tick was
-    // evicted for space, not delivered (`docs/spec-m2.md` §5).
+    // evicted for space, not delivered (`docs/spec.md` §9.4).
     for &(origin, seq) in old_buf.difference(&new_buf) {
         if !applied.contains(&(origin, seq)) {
             trace.push(TraceRecord::DropCausalOverflow {

@@ -14,5 +14,5 @@ swarm-core.workspace = true
 rand_chacha = "0.3"
 rand_core = "0.6"
 blake3 = "1"
-# M2: the simulator signs on behalf of each simulated node. See docs/spec-m2.md §11.
+# M2: the simulator signs on behalf of each simulated node. See docs/spec.md §15.
 ed25519-dalek = { workspace = true, features = ["alloc"] }

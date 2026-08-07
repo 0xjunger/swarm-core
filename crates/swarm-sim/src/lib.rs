@@ -10,6 +10,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod demo;
 pub mod net;
 pub mod partition;
 pub mod rng;

@@ -2,7 +2,7 @@
 //! `DESIGN.md` §11.7 ("Sıralamayı ters kur: önce invariant, sonra kod").
 //!
 //! At M1 only I1 was testable: one node, no network, no CRDT, no escrow.
-//! M2 activates I2 and I3 (`docs/spec-m2.md` §9); I4–I6 are still recorded
+//! M2 activates I2 and I3 (`docs/spec.md` §13); I4–I6 are still recorded
 //! at the bottom of this file as documented placeholders. `tests/causal.rs`
 //! covers the causal-delivery *mechanism* in depth (multi-origin deps, the
 //! buffer bound, anti-entropy) — the tests here restate I2 and I3
@@ -103,7 +103,7 @@ fn m2_roster() -> (Roster, [SigningKey; 3]) {
 }
 
 /// `A`'s chain, built by hand with the self-inclusive `deps` M2 specifies
-/// (`docs/spec-m2.md` §3): each entry's `deps` names only its author's own
+/// (`docs/spec.md` §9.2): each entry's `deps` names only its author's own
 /// immediate predecessor.
 fn a_chain(a: NodeId, key: &SigningKey) -> [Entry; 3] {
     let e0 = UnsignedEntry {
@@ -159,7 +159,7 @@ fn deliver(state: &State, from: NodeId, entry: Entry, at: u64) -> State {
 // I2 — an entry is not applied before its deps are delivered
 // ---------------------------------------------------------------------------
 
-/// Minimal restatement of I2 as an invariant test: `docs/spec-m2.md` §4's
+/// Minimal restatement of I2 as an invariant test: `docs/spec.md` §9.3's
 /// delivery rule is what enforces it. `tests/causal.rs`'s
 /// `i2_an_entry_is_not_applied_before_all_its_cross_node_deps_are_delivered`
 /// exercises the harder multi-origin case; this is the one-dependency case,
@@ -221,7 +221,7 @@ fn i3_same_entries_different_arrival_order_converge_to_identical_state() {
     assert_eq!(q_state.buffer_keys().count(), 0, "fully drained");
 }
 
-/// I3 at M3 (`docs/spec-m3.md` §9): "derived state" now means more than the
+/// I3 at M3 (`docs/spec.md` §13): "derived state" now means more than the
 /// version vector. Two nodes that saw the same entries must hold an identical
 /// claim CRDT **and** name the same winner for every task — the property
 /// M3's acceptance criterion calls "kimse 'ben kazandım' sanmıyor".
@@ -264,7 +264,7 @@ fn i3_same_entries_different_arrival_order_derive_the_same_claims_and_winner() {
 // ---------------------------------------------------------------------------
 // Documented placeholders — not testable at M2, deliberately not stubbed.
 // Each names the milestone whose acceptance criterion activates it
-// (docs/spec-m1.md §8):
+// (docs/spec.md §13):
 //
 //   I4 — spendable rights across all partitions <= authorised total.
 //        Activates at M5 (escrow counter, 1000 seeds).

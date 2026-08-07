@@ -65,7 +65,7 @@ fn one_altered_byte_in_a_middle_entry_breaks_verification() {
     let mut entries = log.entries().to_vec();
     let mid = &mut entries[500];
     // M3 added `Body::Withdraw`, so this destructure is no longer
-    // irrefutable — which is the notice `docs/spec-m1.md` §5 intended. It is
+    // irrefutable — which is the notice `docs/spec.md` §8.2 intended. It is
     // still `chain_of` that builds this chain and it writes claims only, so
     // the other variant is genuinely unreachable here.
     let Body::TaskClaim { task, priority } = mid.body else {
@@ -254,7 +254,7 @@ fn an_empty_chain_verifies_to_nothing() {
 
 #[test]
 fn the_log_bound_is_enforced_by_refusal() {
-    // docs/spec-m1.md §6: eviction is not safe until the MMR exists, so a
+    // docs/spec.md §8.4: eviction is not safe until the MMR exists, so a
     // full log refuses to grow rather than silently dropping history.
     let mut log = Log::new(NodeId(0), test_key(5), 2);
     log.append(claim(0), VersionVector::new()).unwrap();

@@ -9,6 +9,7 @@
 //! for the whole of Phase 1.
 
 use swarm_core::NodeId;
+use swarm_sim::demo::flag;
 use swarm_sim::{run, Partition, SimConfig};
 
 fn main() {
@@ -54,9 +55,4 @@ fn main() {
     println!("ticks       {ticks}");
     println!("records     {}", trace.records().len());
     println!("digest      {}", trace.digest_hex());
-}
-
-fn flag(args: &[String], name: &str) -> Option<u64> {
-    let i = args.iter().position(|a| a == name)?;
-    args.get(i + 1)?.parse().ok()
 }

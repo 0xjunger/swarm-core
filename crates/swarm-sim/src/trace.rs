@@ -64,9 +64,9 @@ pub enum TraceRecord {
         at: u64,
         groups: String,
     },
-    /// A node applied entry `(origin, seq)` to its state (`docs/spec-m2.md`
-    /// §4). Derived by diffing `State` before/after a `step` call — `step`
-    /// itself stays pure and returns only `Effect`s (`docs/spec.md` §3.2).
+    /// A node applied entry `(origin, seq)` to its state (`docs/spec.md`
+    /// §9.3). Derived by diffing `State` before/after a `step` call — `step`
+    /// itself stays pure and returns only `Effect`s (`docs/spec.md` §3.3).
     Apply {
         at: u64,
         node: NodeId,
@@ -74,7 +74,7 @@ pub enum TraceRecord {
         seq: u64,
     },
     /// A node buffered entry `(origin, seq)`: received, but its causal
-    /// dependencies are not yet satisfied (`docs/spec-m2.md` §5).
+    /// dependencies are not yet satisfied (`docs/spec.md` §9.4).
     Buffer {
         at: u64,
         node: NodeId,
@@ -82,7 +82,7 @@ pub enum TraceRecord {
         seq: u64,
     },
     /// A node's causal buffer was full and `(origin, seq)` was evicted to
-    /// make room (`docs/spec-m2.md` §5). Recoverable: the next anti-entropy
+    /// make room (`docs/spec.md` §9.4). Recoverable: the next anti-entropy
     /// round re-offers it.
     DropCausalOverflow {
         at: u64,
@@ -232,7 +232,7 @@ fn render_envelope(e: &Envelope) -> String {
     }
 }
 
-/// The entry's meaning (`docs/spec-m3.md` §12). M3 is the first milestone in
+/// The entry's meaning (`docs/spec.md` §7.2). M3 is the first milestone in
 /// which the body carries anything, and a trace a human cannot read is a trace
 /// a human cannot debug. Same canonical rules as everything else here: fixed
 /// field order, zero-padded integers, no floats.
@@ -347,7 +347,7 @@ mod tests {
 
     /// A claim and a withdrawal for the same task must not render alike:
     /// `docs/spec.md` §6.1 makes the trace a fingerprint of the *model*, and
-    /// M3's model distinguishes these two (`docs/spec-m3.md` §12).
+    /// M3's model distinguishes these two (`docs/spec.md` §7.2).
     #[test]
     fn claim_and_withdrawal_render_distinctly() {
         let mut e = entry();

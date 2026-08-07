@@ -4,21 +4,13 @@
 //!   cargo run -q --example watch -- --ticks 40      # far enough to see a partition
 //!   cargo run -q --example watch -- --step          # press Enter per tick
 //!
-//! This reads nothing but the public API of `swarm-sim`. It adds no code to the
-//! library and the library does not know it exists.
+//! This reads nothing but the public API of `swarm-sim` plus its shared
+//! `demo` formatting helpers (`crates/swarm-sim/src/demo.rs`).
 
 use std::io::BufRead;
-use swarm_core::wire::Body;
-use swarm_core::{Envelope, NodeId};
+use swarm_core::NodeId;
+use swarm_sim::demo::{envelope_label, flag, pretty_groups, BLD, CYN, DIM, GRN, RED, RST, YEL};
 use swarm_sim::{run, Partition, SimConfig, TraceRecord};
-
-const DIM: &str = "\x1b[2m";
-const RED: &str = "\x1b[31m";
-const GRN: &str = "\x1b[32m";
-const YEL: &str = "\x1b[33m";
-const CYN: &str = "\x1b[36m";
-const BLD: &str = "\x1b[1m";
-const RST: &str = "\x1b[0m";
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -162,19 +154,6 @@ fn main() {
     );
 }
 
-/// A short human label for what an envelope carries.
-fn envelope_label(e: &Envelope) -> String {
-    match e {
-        Envelope::Entry(entry) => match entry.body {
-            Body::TaskClaim { task, .. } => {
-                format!("n{}#{} claim t{task}", entry.node.0, entry.seq)
-            }
-            Body::Withdraw { task } => format!("n{}#{} withdraw t{task}", entry.node.0, entry.seq),
-        },
-        Envelope::AntiEntropy(vv) => format!("vv sync ({} known)", vv.iter().count()),
-    }
-}
-
 /// A bar showing how many messages are currently in the air.
 fn bar(n: i32) -> String {
     let n = n.max(0) as usize;
@@ -182,26 +161,4 @@ fn bar(n: i32) -> String {
         "{DIM}in flight{RST} {n:>3} {CYN}{}{RST}",
         "▍".repeat(n.min(40))
     )
-}
-
-/// Turns "000:000,001:000,002:001" into "{n0 n1} {n2}".
-fn pretty_groups(s: &str) -> String {
-    let mut out: Vec<Vec<String>> = Vec::new();
-    for pair in s.split(',') {
-        let (node, group) = pair.split_once(':').unwrap_or(("0", "0"));
-        let g: usize = group.parse().unwrap_or(0);
-        while out.len() <= g {
-            out.push(Vec::new());
-        }
-        out[g].push(format!("n{}", node.parse::<u8>().unwrap_or(0)));
-    }
-    out.iter()
-        .map(|g| format!("{{{}}}", g.join(" ")))
-        .collect::<Vec<_>>()
-        .join("  ")
-}
-
-fn flag(args: &[String], name: &str) -> Option<u64> {
-    let i = args.iter().position(|a| a == name)?;
-    args.get(i + 1)?.parse().ok()
 }

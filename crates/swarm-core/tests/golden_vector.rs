@@ -38,7 +38,7 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// The pinned signing bytes of the golden entry (`docs/spec-m1.md` §3.1).
+/// The pinned signing bytes of the golden entry (`docs/spec.md` §8.2).
 /// Computed independently from the spec layout: tag || mission_id || epoch
 /// || node || seq || prev || deps (empty) || TaskClaim{task: 7, priority: 1}.
 const GOLDEN_SIGNING_HEX: &str = "535741524d5f454e5452595f5631\
@@ -52,7 +52,7 @@ const GOLDEN_SIGNING_HEX: &str = "535741524d5f454e5452595f5631\
     0000000000000007\
     01";
 
-/// The pinned full encoding of the golden entry (`docs/spec-m1.md` §3.4):
+/// The pinned full encoding of the golden entry (`docs/spec.md` §8.2):
 /// the signing bytes above followed by the Ed25519 signature.
 const GOLDEN_ENCODED_HEX: &str = "535741524d5f454e5452595f5631\
     0000000000000000000000000000000000000000000000000000000000000000\
@@ -101,9 +101,9 @@ fn golden_signature_verifies_under_the_golden_key() {
 
 // ---------------------------------------------------------------------------
 // M2: a second, independent golden vector for a *non-empty* `VersionVector`
-// (`docs/spec-m2.md` §10). M1's vector above is unchanged — this is an
+// (`docs/spec.md` §8.5). M1's vector above is unchanged — this is an
 // addition, not a replacement, proving `deps`'s already-frozen encoding
-// (`docs/spec-m1.md` §3.2: `u16 BE` count, then `(node u8, seq u64 BE)`
+// (`docs/spec.md` §8.2: `u16 BE` count, then `(node u8, seq u64 BE)`
 // pairs ascending by `NodeId`) holds once the field actually carries data.
 // ---------------------------------------------------------------------------
 
@@ -182,7 +182,7 @@ fn golden_vector_with_a_non_empty_version_vector() {
 }
 
 // ---------------------------------------------------------------------------
-// M3: a third golden vector for the `Withdraw` body (`docs/spec-m3.md` §10).
+// M3: a third golden vector for the `Withdraw` body (`docs/spec.md` §8.5).
 // Every `Body` variant arrives with a test (`DESIGN.md` §11.4). The two
 // vectors above must stay byte-identical — a new enum variant adds a tag, it
 // never rewrites an existing encoding. If either of them moves, something has
@@ -207,7 +207,7 @@ fn golden_entry_withdraw() -> Entry {
 
 /// Computed independently from the spec layout: tag || mission_id || epoch ||
 /// node || seq || prev || deps({0: 2}) || Withdraw{task: 7}. The body segment
-/// is `01` (tag, `docs/spec-m3.md` §2) followed by `0000000000000007` — eight
+/// is `01` (tag, `docs/spec.md` §8.2) followed by `0000000000000007` — eight
 /// big-endian bytes and **no priority byte**, which is what distinguishes it
 /// from `TaskClaim`.
 const GOLDEN_SIGNING_HEX_WITHDRAW: &str = "535741524d5f454e5452595f5631\
@@ -254,7 +254,7 @@ fn golden_vector_pins_the_withdraw_body() {
 
 /// A claim and a withdrawal naming the same task must never produce the same
 /// signed bytes — otherwise one signature would attest to both
-/// (`docs/spec-m3.md` §2).
+/// (`docs/spec.md` §8.2).
 #[test]
 fn a_claim_and_a_withdrawal_for_one_task_sign_different_bytes() {
     let key = SigningKey::from_bytes(&GOLDEN_KEY);

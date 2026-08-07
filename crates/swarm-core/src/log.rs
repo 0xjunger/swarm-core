@@ -2,7 +2,7 @@
 //!
 //! The proof path — the MMR — arrives later (`DESIGN.md` §4.3). Until it
 //! does, the chain keeps every entry, and its bound is enforced by refusing
-//! to grow rather than by evicting (`docs/spec-m1.md` §6).
+//! to grow rather than by evicting (`docs/spec.md` §8.4).
 
 use alloc::vec::Vec;
 
@@ -18,7 +18,7 @@ use crate::NodeId;
 ///
 /// `PartialEq`/`Eq` derive cleanly: `SigningKey` implements both (a
 /// constant-time comparison), which is what lets [`crate::State`] keep
-/// deriving them once it embeds a `Log` (`docs/spec-m2.md` §7).
+/// deriving them once it embeds a `Log` (`docs/spec.md` §9.6).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Log {
     me: NodeId,
@@ -34,14 +34,14 @@ pub struct Log {
 pub enum LogError {
     /// The chain has reached its stated bound. Eviction is not safe until the
     /// MMR exists (`DESIGN.md` §4.3), so a full log refuses rather than drops
-    /// (`docs/spec-m1.md` §6).
+    /// (`docs/spec.md` §8.4).
     Full,
 }
 
 impl Log {
     /// Creates an empty chain for `me`, bounded by `cap`.
     ///
-    /// Phase 1 fixes `mission_id` and `epoch` (`docs/spec-m1.md` §2); the
+    /// Phase 1 fixes `mission_id` and `epoch` (`docs/spec.md` §8.1); the
     /// fields exist now so that real values later change nothing structural.
     ///
     /// # Panics
@@ -86,7 +86,7 @@ impl Log {
     /// it. Returns the recorded entry.
     ///
     /// `deps` is the caller's causal snapshot at the moment of authorship
-    /// (`docs/spec-m2.md` §3) — empty at M1, populated from M2 onward. The
+    /// (`docs/spec.md` §9.2) — empty at M1, populated from M2 onward. The
     /// field is activated here, not reinterpreted: M1 callers pass
     /// `VersionVector::new()` and their behaviour is unchanged.
     pub fn append(&mut self, body: Body, deps: VersionVector) -> Result<&Entry, LogError> {
@@ -141,12 +141,12 @@ pub enum ChainError {
 }
 
 /// Verifies a single entry against a specific expected position in some
-/// chain (`docs/spec-m1.md` §4.4, minus the single-author check, which only
+/// chain (`docs/spec.md` §8.3, minus the single-author check, which only
 /// makes sense across a batch — see [`verify_chain`]).
 ///
 /// The check order is fixed: membership, mission, epoch, seq, link,
 /// signature. `index` is only used to label errors; callers outside a batch
-/// (M2's causal delivery, `docs/spec-m2.md` §4) may pass `0`.
+/// (M2's causal delivery, `docs/spec.md` §9.3) may pass `0`.
 pub fn verify_next(
     roster: &Roster,
     index: usize,
@@ -186,7 +186,7 @@ pub fn verify_next(
     Ok(VerifiedEntry::from_verified(entry.clone()))
 }
 
-/// Verifies a chain end to end (`docs/spec-m1.md` §4.4) and returns its
+/// Verifies a chain end to end (`docs/spec.md` §8.3) and returns its
 /// entries as [`VerifiedEntry`], or the first failure.
 ///
 /// The check order is fixed: membership, single-author, mission, epoch, seq,

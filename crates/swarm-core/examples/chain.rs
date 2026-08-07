@@ -32,7 +32,7 @@ fn main() {
     keys.insert(node, key.verifying_key());
     let roster = Roster::new(PHASE1_MISSION_ID, PHASE1_EPOCH, keys);
 
-    println!("M1 — one node, a signed hash chain (docs/spec-m1.md)");
+    println!("M1 — one node, a signed hash chain (docs/spec.md §8)");
     println!();
 
     // 1. Build.

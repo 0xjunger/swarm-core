@@ -1,4 +1,4 @@
-//! The task-claim CRDT (`docs/spec-m3.md` §3-5).
+//! The task-claim CRDT (`docs/spec.md` §10.2-10.5).
 //!
 //! Written before the code it guards (`DESIGN.md` §11.7). Claims are built by
 //! hand here — the same `raw_entry`/`vv` idiom `tests/causal.rs` uses — so a
@@ -44,7 +44,7 @@ fn vv(pairs: &[(NodeId, u64)]) -> VersionVector {
     v
 }
 
-/// An entry with an arbitrary `deps`, so `lc` (`docs/spec-m3.md` §3) can be
+/// An entry with an arbitrary `deps`, so `lc` (`docs/spec.md` §10.2) can be
 /// dialled directly: `lc = Σ (seq + 1)` over `deps`.
 fn entry(node: NodeId, key: &SigningKey, seq: u64, deps: VersionVector, body: Body) -> Entry {
     UnsignedEntry {
@@ -59,7 +59,7 @@ fn entry(node: NodeId, key: &SigningKey, seq: u64, deps: VersionVector, body: Bo
     .sign(key)
 }
 
-/// `Claims::observe` only accepts verified entries (`docs/spec-m3.md` §4), so
+/// `Claims::observe` only accepts verified entries (`docs/spec.md` §10.3), so
 /// tests must go through the verifier too. `expected_seq`/`expected_prev` are
 /// fed from the entry itself: this file is testing the CRDT, not the chain
 /// rules, which `tests/chain.rs` already covers.
@@ -100,7 +100,7 @@ fn fold(entries: &[VerifiedEntry]) -> Claims {
 }
 
 // ---------------------------------------------------------------------------
-// lc: the derived logical clock (docs/spec-m3.md §3)
+// lc: the derived logical clock (docs/spec.md §10.2)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -169,7 +169,7 @@ fn node_id_decides_when_priority_and_logical_clock_tie() {
 }
 
 // ---------------------------------------------------------------------------
-// The OR-set: unique tags, idempotence, commutativity (docs/spec-m3.md §4)
+// The OR-set: unique tags, idempotence, commutativity (docs/spec.md §10.3)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -213,7 +213,7 @@ fn i3_the_same_entry_set_folds_to_the_same_claims_in_any_order() {
 }
 
 // ---------------------------------------------------------------------------
-// Losing is monotone (docs/spec-m3.md §5.1)
+// Losing is monotone (docs/spec.md §10.5)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -239,7 +239,7 @@ fn once_a_node_has_lost_no_later_claim_can_make_it_win_again() {
 }
 
 // ---------------------------------------------------------------------------
-// Withdrawal is a record, not a set removal (docs/spec-m3.md §4.1)
+// Withdrawal is a record, not a set removal (docs/spec.md §10.4)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -257,7 +257,7 @@ fn a_withdrawal_is_recorded_without_disturbing_the_winner() {
     assert_eq!(
         before.winner(7),
         after.winner(7),
-        "a withdrawal must not move the winner (docs/spec-m3.md §4.1)"
+        "a withdrawal must not move the winner (docs/spec.md §10.4)"
     );
     assert_eq!(
         before.claims(7).count(),
@@ -267,7 +267,7 @@ fn a_withdrawal_is_recorded_without_disturbing_the_winner() {
 }
 
 // ---------------------------------------------------------------------------
-// Claim's Ord *is* the winner rule (docs/spec-m3.md §5)
+// Claim's Ord *is* the winner rule (docs/spec.md §10.5)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -302,7 +302,7 @@ fn claim_ordering_is_the_winner_rule_in_field_order() {
             ..base
         } < base
     );
-    // seq is the totality tie-break only (docs/spec-m3.md §5).
+    // seq is the totality tie-break only (docs/spec.md §10.5).
     assert!(Claim { seq: 4, ..base } < base);
 }
 

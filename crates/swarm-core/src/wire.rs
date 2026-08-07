@@ -12,7 +12,7 @@ use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use crate::causal::VersionVector;
 use crate::NodeId;
 
-/// Domain separation tag (`DESIGN.md` §7, `docs/spec-m1.md` §3.1).
+/// Domain separation tag (`DESIGN.md` §7, `docs/spec.md` §8.2).
 ///
 /// A signature is only valid under the context it was created for. Prefixing
 /// the signed bytes with this tag means an entry signature can never be
@@ -31,7 +31,7 @@ pub const PHASE1_EPOCH: u32 = 0;
 pub struct Hash(pub [u8; 32]);
 
 impl Hash {
-    /// The link of an entry with no predecessor (`docs/spec-m1.md` §4.3).
+    /// The link of an entry with no predecessor (`docs/spec.md` §8.3).
     pub const ZERO: Hash = Hash([0u8; 32]);
 
     pub fn new(bytes: &[u8]) -> Self {
@@ -50,12 +50,12 @@ pub enum Body {
     /// winner rule is `min by (priority, logical_clock, node_id)`
     /// (`DESIGN.md` §4.2); `priority` is encoded from day one so that rule
     /// needs no format change, and `logical_clock` is derived from `deps`
-    /// rather than carried, so it needs none either (`docs/spec-m3.md` §3).
+    /// rather than carried, so it needs none either (`docs/spec.md` §10.2).
     TaskClaim { task: u64, priority: u8 },
     /// "I claimed `task`, I am not the winner, I am standing down."
     ///
     /// A record, not a CRDT operation: it does **not** remove the author's
-    /// claim from the claim set (`docs/spec-m3.md` §4.1). This is the
+    /// claim from the claim set (`docs/spec.md` §10.4). This is the
     /// "geri çekilme kaydı" M3's acceptance criterion asks for.
     Withdraw { task: u64 },
 }
@@ -96,7 +96,7 @@ pub struct UnsignedEntry {
 }
 
 impl UnsignedEntry {
-    /// The bytes that get signed (`docs/spec-m1.md` §3.1).
+    /// The bytes that get signed (`docs/spec.md` §8.2).
     ///
     /// Written field by field, big-endian, in one fixed order. Serde is never
     /// involved: its output can change with version or settings, and a silent
@@ -164,7 +164,7 @@ impl Entry {
         unsigned.signing_bytes()
     }
 
-    /// The full canonical encoding (`docs/spec-m1.md` §3.4): the signing bytes
+    /// The full canonical encoding (`docs/spec.md` §8.2): the signing bytes
     /// followed by the signature. This is what the hash chain hashes and what
     /// the golden vector pins.
     pub fn encoded(&self) -> Vec<u8> {
@@ -174,16 +174,10 @@ impl Entry {
     }
 
     /// The link this entry contributes to its successor's `prev` field
-    /// (`docs/spec-m1.md` §4.3): BLAKE3 of the full encoding, signature
+    /// (`docs/spec.md` §8.3): BLAKE3 of the full encoding, signature
     /// included, so tampering with a signature breaks every following link.
     pub fn chain_hash(&self) -> Hash {
         Hash::new(&self.encoded())
-    }
-
-    /// Checks the signature against a known key. Membership and chain rules
-    /// are checked by [`crate::log::verify_chain`], not here.
-    pub fn verify_signature(&self, key: &VerifyingKey) -> bool {
-        key.verify_strict(&self.signing_bytes(), &self.sig).is_ok()
     }
 }
 
@@ -278,19 +272,25 @@ mod tests {
     fn signature_round_trips() {
         let k = key(1);
         let entry = unsigned().sign(&k);
-        assert!(entry.verify_signature(&k.verifying_key()));
+        assert!(k
+            .verifying_key()
+            .verify_strict(&entry.signing_bytes(), &entry.sig)
+            .is_ok());
     }
 
     #[test]
     fn signature_fails_under_a_different_key() {
         let entry = unsigned().sign(&key(1));
-        assert!(!entry.verify_signature(&key(2).verifying_key()));
+        assert!(key(2)
+            .verifying_key()
+            .verify_strict(&entry.signing_bytes(), &entry.sig)
+            .is_err());
     }
 
     #[test]
     fn encoding_covers_the_signature() {
         // The chain hash must change if the signature alone changes: the
-        // full encoding includes it (docs/spec-m1.md §4.3).
+        // full encoding includes it (docs/spec.md §8.3).
         let entry = unsigned().sign(&key(1));
         let mut forged = entry.clone();
         let mut sig = forged.sig.to_bytes();
@@ -320,7 +320,7 @@ mod tests {
     #[test]
     fn the_two_bodies_never_share_an_encoding() {
         // Distinct tags are what keep a claim from being read as a withdrawal
-        // under the same signature (`docs/spec-m3.md` §2).
+        // under the same signature (`docs/spec.md` §8.2).
         let (mut claim, mut withdraw) = (Vec::new(), Vec::new());
         Body::TaskClaim {
             task: 7,

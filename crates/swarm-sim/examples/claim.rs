@@ -17,15 +17,8 @@ use std::collections::BTreeSet;
 use swarm_core::state::TaskId;
 use swarm_core::wire::Body;
 use swarm_core::{Envelope, NodeId, State};
+use swarm_sim::demo::{flag, pretty_groups, BLD, CYN, DIM, GRN, RED, RST, YEL};
 use swarm_sim::{run_with_states, Partition, SimConfig, TraceRecord};
-
-const DIM: &str = "\x1b[2m";
-const RED: &str = "\x1b[31m";
-const GRN: &str = "\x1b[32m";
-const YEL: &str = "\x1b[33m";
-const CYN: &str = "\x1b[36m";
-const BLD: &str = "\x1b[1m";
-const RST: &str = "\x1b[0m";
 
 const A: NodeId = NodeId(0);
 const B: NodeId = NodeId(1);
@@ -61,7 +54,7 @@ fn main() {
         ],
     };
 
-    println!("\n{BLD}swarm-core{RST}  M3 — task-claim CRDT (docs/spec-m3.md)");
+    println!("\n{BLD}swarm-core{RST}  M3 — task-claim CRDT (docs/spec.md §10)");
     println!(
         "{DIM}seed {CYN}{seed}{RST}{DIM}  ·  {{n0 n1}} | {{n2}} for {before} ticks, heal, {after} more  ·  loss 10%{RST}"
     );
@@ -74,7 +67,7 @@ fn main() {
         // carries it afterwards is `converge`'s subject, not this demo's. An
         // authoring broadcast is the **first** time an entry's own author
         // sends it — every later send of the same `(origin, seq)` is an
-        // anti-entropy fill reply (`docs/spec-m2.md` §6).
+        // anti-entropy fill reply (`docs/spec.md` §9.5).
         let mut seen: BTreeSet<(NodeId, u64)> = BTreeSet::new();
         for r in trace.records() {
             match r {
@@ -204,27 +197,4 @@ fn own_log(state: &State) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
-}
-
-/// Turns "000:000,001:000,002:001" into "{n0 n1} {n2}". Duplicated from
-/// `converge.rs` rather than shared: examples add no code to the library.
-fn pretty_groups(s: &str) -> String {
-    let mut out: Vec<Vec<String>> = Vec::new();
-    for pair in s.split(',') {
-        let (node, group) = pair.split_once(':').unwrap_or(("0", "0"));
-        let g: usize = group.parse().unwrap_or(0);
-        while out.len() <= g {
-            out.push(Vec::new());
-        }
-        out[g].push(format!("n{}", node.parse::<u8>().unwrap_or(0)));
-    }
-    out.iter()
-        .map(|g| format!("{{{}}}", g.join(" ")))
-        .collect::<Vec<_>>()
-        .join("  ")
-}
-
-fn flag(args: &[String], name: &str) -> Option<u64> {
-    let i = args.iter().position(|a| a == name)?;
-    args.get(i + 1)?.parse().ok()
 }

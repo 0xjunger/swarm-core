@@ -4,11 +4,11 @@
 //! implements the third — task claims, `Map<TaskId, ORSet<Claim>>` with the
 //! deterministic winner `min by (priority, logical_clock, node_id)`. The LWW
 //! telemetry register and the sensor-track OR-set are not in M3's milestone
-//! text and are not written here (`docs/spec-m3.md` §11).
+//! text and are not written here (`docs/spec.md` §14).
 //!
 //! Everything in this module is a fold over entries. Nothing here reads a
 //! clock, draws a random number, or depends on arrival order — which is what
-//! makes invariant I3 structural rather than argued (`docs/spec-m3.md` §9).
+//! makes invariant I3 structural rather than argued (`docs/spec.md` §13).
 
 use alloc::collections::{BTreeMap, BTreeSet};
 
@@ -25,7 +25,7 @@ pub type TaskId = u64;
 /// `(priority, lc, node, seq)` compares in exactly the order `DESIGN.md` §4.2
 /// specifies — `min by (priority, logical_clock, node_id)` — with `seq`
 /// appended so the ordering is total by construction rather than by
-/// assumption (`docs/spec-m3.md` §5). Deriving it means there is no second
+/// assumption (`docs/spec.md` §10.5). Deriving it means there is no second
 /// place where the comparison could drift away from the spec.
 ///
 /// `(node, seq)` is also the OR-set tag: it is the identity of the entry that
@@ -33,10 +33,10 @@ pub type TaskId = u64;
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Claim {
     /// Lower is better. Fixed at 1 for autonomously authored claims
-    /// (`docs/spec-m3.md` §6); real priorities arrive with a real mission.
+    /// (`docs/spec.md` §10.6); real priorities arrive with a real mission.
     pub priority: u8,
     /// The derived logical clock: how many entries the author had applied
-    /// when it wrote this claim (`docs/spec-m3.md` §3). Lower means causally
+    /// when it wrote this claim (`docs/spec.md` §10.2). Lower means causally
     /// earlier.
     pub lc: u64,
     /// The author. The last term of `DESIGN.md` §4.2's rule, and never a wall
@@ -51,7 +51,7 @@ pub struct Claim {
 /// `Map<TaskId, ORSet<Claim>>` per `DESIGN.md` §4.2. A `BTreeSet<Claim>` *is*
 /// the OR-set here: `Claim` carries its own unique `(node, seq)` tag, so two
 /// nodes bidding identically produce two elements rather than one. `remove` is
-/// not implemented — see [`Claims::observe`] and `docs/spec-m3.md` §4.1.
+/// not implemented — see [`Claims::observe`] and `docs/spec.md` §10.4.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct Claims {
     by_task: BTreeMap<TaskId, BTreeSet<Claim>>,
@@ -73,11 +73,11 @@ impl Claims {
     /// Both arms are set insertions, so folding is idempotent and
     /// commutative — the same entry set yields the same `Claims` whatever
     /// order it arrives in. That is invariant I3 discharged structurally
-    /// (`docs/spec-m3.md` §9).
+    /// (`docs/spec.md` §13).
     ///
     /// Note what `Withdraw` does **not** do: it does not remove the author's
     /// claim. The claim set is grow-only, so the winner is a pure `min` over
-    /// it and "losing is monotone" holds (`docs/spec-m3.md` §4.1, §5.1).
+    /// it and "losing is monotone" holds (`docs/spec.md` §10.4-10.5).
     pub fn observe(&mut self, entry: &VerifiedEntry) {
         let e = entry.entry();
         match e.body {
@@ -123,7 +123,7 @@ impl Claims {
     }
 
     /// Whether `node` has claimed `task` — the precondition for owing a
-    /// withdrawal (`docs/spec-m3.md` §6).
+    /// withdrawal (`docs/spec.md` §10.6).
     pub fn has_claimed(&self, task: TaskId, node: NodeId) -> bool {
         self.claims(task).any(|c| c.node == node)
     }
