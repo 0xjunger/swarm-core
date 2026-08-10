@@ -13,3 +13,11 @@ if cargo test --release -p swarm-core --features mutant-i3 \
   exit 1
 fi
 echo "OK: the checker caught the mutant."
+
+echo "== no_std: swarm-core must cross-compile for a bare-metal target =="
+cargo build -p swarm-core --target thumbv7em-none-eabihf
+
+echo "== lint: workspace must be clippy-clean =="
+cargo clippy --workspace -- -D warnings
+
+echo "OK: all checks passed."

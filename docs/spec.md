@@ -23,17 +23,19 @@
 Phase 1's exit criteria are met. It runs the full workspace test suite, then
 rebuilds `swarm-core` with the `mutant-i3` negative control
 (`PHASE1-REMEDIATION.md` A2) and requires that build to fail — a checker that
-cannot fail on a deliberately broken build is not a checker. Green on
+cannot fail on a deliberately broken build is not a checker — then
+cross-compiles `swarm-core` for `thumbv7em-none-eabihf` (proving the `no_std`
+claim, §3.1) and runs `cargo clippy --workspace -- -D warnings`. Green on
 `scripts/verify.sh` means the criteria are met; nothing else in this
 document does.
 
-**Implemented: M0, M1, M2, M3, M4, M5.** Sections below describe the system as it
-exists today, not as it was at any past milestone. Where a rule changed shape
-between milestones (e.g. `deps`, invariant I3), only the current shape is
-normative; the change itself is recorded in §18.
+**Implemented: M0, M1, M2, M3, M4, M5, M6, M7.** Sections below describe the
+system as it exists today, not as it was at any past milestone. Where a rule
+changed shape between milestones (e.g. `deps`, invariant I3), only the
+current shape is normative; the change itself is recorded in §18/§19.
 
-**Not yet implemented:** M6 (property-based invariant checker with `Class` /
-`Action` / policy gate), and everything in Phase 2+. §17 sketches these without
+**Not yet implemented:** everything in Phase 2+ (`swarm-net`, signed `Spec`,
+MMR-based log pruning, input attestation). §17 sketches some of this without
 freezing decisions that are not yet made — do not treat §17 as binding.
 
 ---
@@ -48,6 +50,7 @@ DESIGN.md             source of truth (Turkish)
 docs/spec.md           this file
 crates/swarm-core/    no_std, no I/O, minimal dependencies (§16)
 crates/swarm-sim/     std; the simulator that drives swarm-core
+crates/swarm-verify/  std; the offline verifier — no simulator dependency (§20)
 ```
 
 `DESIGN.md` §5 draws the crates as a flat tree. They live under `crates/` here
@@ -55,9 +58,12 @@ only because the workspace root directory is itself named `swarm-core`, and a
 nested `swarm-core/swarm-core/` path is needlessly confusing. The module names
 *inside* `swarm-core` (`wire`, `causal`, `log`, `state`, `policy`, `fault`)
 follow §5 and are created as each milestone needs them; `wire`, `causal`,
-`log`, `state`, and `fault` exist today (M1–M5). `policy` arrives at M6.
+`log`, `state`, `fault`, and `policy` exist today (M1–M6).
 
-`swarm-verify` and `swarm-net` do not exist yet (M6 and Phase 2 respectively).
+`swarm-verify` exists as of M6 (`check_invariants`, an in-process oracle) and
+gained its external, file-based surface at M7 (§20): `LogBundle`, `Spec`,
+`Verdict`, and the `swarm-verify` binary. `swarm-net` (Phase 2) does not exist
+yet.
 
 ---
 
@@ -1215,12 +1221,12 @@ snapshot.
 
 | # | Invariant | Status |
 |---|---|---|
-| **I1** | At most one signed entry per `(node, seq)` | **Binding.** Enforced by construction (`seq` = chain length, §8.3) and by verification (§8.3 rule 5 rejects duplicates). Tested in `swarm-core/tests/invariants.rs`, and executable-checked by `swarm-verify::check_invariants` across 5000 random seeds (`swarm-sim/tests/m6_property.rs`). |
-| **I2** | An entry is not applied before its `deps` are delivered | **Binding.** §9.3's delivery rule is the enforcement; tested in `swarm-core/tests/causal.rs` (buffering, cross-node deps) and `swarm-core/tests/invariants.rs`, and executable-checked by `swarm-verify::check_invariants` across 5000 random seeds. |
-| **I3** | Two nodes that have seen the same entry set derive the same state | **Binding, and strengthened at M3.** "Derived state" now means `causal_vv`, the entry set, `claims`, **and `winner(t)` for every task `t`** — not just the version vector. Discharged structurally by §10.3 (set insertion is commutative and idempotent) and §10.5 (losing is monotone); tested in `swarm-core/tests/invariants.rs` and end to end by `swarm-sim/tests/m2_convergence.rs` and `swarm-sim/tests/m3_claim.rs`. Executable-checked by `swarm-verify::check_invariants` across 5000 random seeds; the checker's negative control is a `mutant-i3` cargo feature that breaks the tie-break to prefer the observing node's own claim — the same test run against that build reports a real I3 violation (`PHASE1-REMEDIATION.md` A2). |
-| I4 | Spendable rights across all partitions ≤ authorised total | **Binding.** Discharged structurally (§12.4): each node's spending is locally capped, so the global sum is bounded by the sum of per-node caps — no consensus required. Tested in `swarm-core/tests/invariants.rs` (unit), end to end by `swarm-sim/tests/m5_escrow.rs` (1000 seeds with random loss, plus a fabricated-overspend negative control that calls `swarm-verify::check_invariants` directly), and executable-checked across 5000 random seeds by `swarm-verify::check_invariants`. |
-| I5 | No safety-critical effect without a valid certificate in the log | **Binding, structural — not an executable check.** The `Action` trait does not tie `Cert` to `Class` at the type level — nothing stops a future type from implementing `Action` with `CLASS = SafetyCritical` and `Cert = ()`. What actually holds today is narrower and still real: no type in this crate implements `Action` with `CLASS = SafetyCritical` at all, so `commit` can never be called on one — proven by the `compile_fail` doctest on `policy::SafetyCriticalAction`. `swarm-verify::check_invariants` does not check I5; there is nothing at runtime to check. |
-| I6 | Every effect is traceable to a signed entry chain | **Binding, structural — not an executable check.** [`policy::author_and_commit`] is the single path through which any `Effect::Send` is created, and it always writes to the log first — a code-structure fact verifiable by reading `policy.rs`, not a property `swarm-verify::check_invariants` runs a check for. |
+| **I1** | At most one signed entry per `(node, seq)` | **Binding.** Enforced by construction (`seq` = chain length, §8.3) and by verification (§8.3 rule 5 rejects duplicates). Tested in `swarm-core/tests/invariants.rs`, and executable-checked in-process by the oracle, `swarm-verify::check_invariants`, across 5000 random seeds (`swarm-sim/tests/m6_property.rs`). **Also executable-checked externally, from bytes alone, by `swarm-verify::verify` (§20.5)**: every chain-verified entry in a `LogBundle`, grouped by `(author, seq)`, with a second, independent `verify_poe` re-check before any conflict is reported — `crates/swarm-verify/tests/fixtures.rs`'s `equivocation.bundle` (§20.7) is the fixture proof. |
+| **I2** | An entry is not applied before its `deps` are delivered | **Binding.** §9.3's delivery rule is the enforcement; tested in `swarm-core/tests/causal.rs` (buffering, cross-node deps) and `swarm-core/tests/invariants.rs`. Executable-checked in-process by the oracle across 5000 random seeds — but the oracle's `check_i2` tests only the *final* `causal_vv`, which by the end of a run has grown to cover nearly everything: it catches "the dependency never arrived," not "this was applied before it arrived." **`swarm-verify::verify` (§20.5) checks the temporal property properly**: a causal fixed-point replay over the bundle's raw entries, independently reimplemented (`crates/swarm-verify/src/fold.rs`); an entry the replay cannot reach is direct evidence of the violation, not an inference from a monotone summary. The 5000-seed figure is real evidence for I1 and I4 above; for I2 it is evidence only that the oracle's *weaker* check passes, which is why it is not presented as equal-strength proof here — this is a calibration, not a weakness discovered late (the distinction was visible before M7's replay closed it; see §20.5, E7b). |
+| **I3** | Two nodes that have seen the same entry set derive the same state | **Binding, and strengthened at M3.** "Derived state" now means `causal_vv`, the entry set, `claims`, **and `winner(t)` for every task `t`** — not just the version vector. Discharged structurally by §10.3 (set insertion is commutative and idempotent) and §10.5 (losing is monotone); tested in `swarm-core/tests/invariants.rs` and end to end by `swarm-sim/tests/m2_convergence.rs` and `swarm-sim/tests/m3_claim.rs`. Executable-checked in-process by the oracle across 5000 random seeds; the oracle's negative control is the `mutant-i3` cargo feature, which breaks `Claims::winner`'s tie-break to prefer the observing node's own claim — the same test run against that build reports a real I3 violation (`PHASE1-REMEDIATION.md` A2). **`swarm-verify::verify` (§20.5) checks I3 from a `LogBundle` alone**, with no access to any node's live `Claims` — it restates `winner(task)` itself, over its own independently-folded claims, comparing observer pairs whose applied `(author, seq)` key-sets coincide; `Undetermined` rather than `Satisfied` when fewer than two observers, or no two observers' key-sets, are comparable (silence is not evidence). Structurally independent of the oracle's fold in a way that is *demonstrated*, not just argued: `crates/swarm-sim/tests/m7_equivalence.rs::verify_does_not_inherit_the_mutant_i3_tie_break` asserts `verify` still reports I3 `Satisfied` over the tied-claim scenario `mutant_i3_detection` uses — an assertion that holds on both a clean build and a `mutant-i3` one, because `verify` never calls the function that feature changes. |
+| I4 | Spendable rights across all partitions ≤ authorised total | **Binding.** Discharged structurally (§12.4): each node's spending is locally capped, so the global sum is bounded by the sum of per-node caps — no consensus required. Tested in `swarm-core/tests/invariants.rs` (unit), end to end by `swarm-sim/tests/m5_escrow.rs` (1000 seeds with random loss, plus a fabricated-overspend negative control that calls the oracle directly), and executable-checked in-process across 5000 random seeds by `swarm-verify::check_invariants`. **Also executable-checked externally by `swarm-verify::verify`**: `Spend` entries deduped by `(author, seq)` across every observer's replay-applied entries, summed per node against `spec.budgets`; `crates/swarm-verify/tests/verify.rs` includes the E3 independence proof (§20.3) — one bundle, opposite verdicts under a lowered vs. sufficient budget — and `overspend.bundle` (§20.7) is the fixture proof. |
+| I5 | No safety-critical effect without a valid certificate in the log | **Binding, structural — not an executable check.** The `Action` trait does not tie `Cert` to `Class` at the type level — nothing stops a future type from implementing `Action` with `CLASS = SafetyCritical` and `Cert = ()`. What actually holds today is narrower and still real: no type in this crate implements `Action` with `CLASS = SafetyCritical` at all, so `commit` can never be called on one — proven by the `compile_fail` doctest on `policy::SafetyCriticalAction`. Neither the oracle nor `swarm-verify::verify` checks I5; there is nothing at runtime, and nothing in a `LogBundle`, to check (`Verdict::structural_note`, §20.4). |
+| I6 | Every effect is traceable to a signed entry chain | **Binding, structural — not an executable check.** [`policy::author_and_commit`] is the single path through which any `Effect::Send` is created, and it always writes to the log first — a code-structure fact verifiable by reading `policy.rs`, not a property either the oracle or `swarm-verify::verify` runs a check for. |
 
 I1 is what M4's proof of equivocation ultimately makes *accountable* rather
 than merely enforced: verification (§8.3 rule 5) already refuses to apply a
@@ -1369,3 +1375,543 @@ written.
 | M4 | `fault` module: `Poe` (proof of equivocation) and `verify_poe`, self-verifying against the roster alone; `State` gains `poes` and the `detect_equivocation` check run on every entry receipt against the log, `origins`, and the causal buffer; anti-entropy's fill-reply range changed to overlap by one with the peer's claimed head, clamped to this node's own highest, so a numeric-gap-free fork still surfaces; `swarm-sim` gains `SimConfig::equivocation` and the `Equivocation` scenario type; trace gains the `EQUIVOCATION` record. |
 | M5 | `Body::Spend { amount: u64 }`, tag `0x02`; `Escrow` struct (`allocations` + cumulative `spent`) in `state` module; `State` gains `escrow` with `with_budgets` builder; spending logic in `Event::Tick` — 1 unit per `entry_period` while budget remains; `Escrow::observe` folds Spend entries in `attempt_apply` and `author`; I4 discharged structurally (per-node caps bound the global sum); fourth golden vector; `SimConfig` gains `budget_per_node` (default 3); integration test `m5_escrow.rs` with 1000 random-loss seeds + 200 partition+loss seeds + deliberate-overspend negative test. |
 | M6 | `policy` module: `Class` enum (`Degradable`, `ExclusiveCostly`, `SafetyCritical`), `Action` trait (`CLASS`, `Cert`, `body`), `commit()` gate — the single path through which entries produce effects (I6); concrete Phase 1 actions (`TaskClaim`, `Withdraw`, `Spend`) all `Degradable` with `Cert = ()`; `SafetyCriticalAction` defined but not `Action` in Phase 1 — I5 structurally discharged because no `Action` impl has `CLASS = SafetyCritical` at all (not because `Cert` is type-tied to `Class`; nothing enforces that), proven by a `compile_fail` doctest. `author()` removed; all authorship and effect emission now goes through `policy::author_and_commit`. `swarm-verify` crate: independent `check_invariants(states, budgets) -> Vec<Violation>` checking I1–I4 (I5/I6 are structural, not executable-checked); added to workspace members. `proptest` integration: `swarm-sim/tests/m6_property.rs` runs 5000 random seeds with loss, checking invariants via `swarm-verify`; a `mutant-i3` cargo feature (off by default) breaks `Claims::winner`'s tie-break, and the same test run against that build reports a real I3 violation — `scripts/verify.sh` runs both directions. I5/I6 promoted to binding (structural) in invariants table. |
+| M7 | External verifier (§20). `swarm_core::codec`: `decode_entry`/`decode_version_vector`/`decode_body`, the exact inverse of §8.2's encoders, `no_std` + `alloc`, canonicity-enforcing (`DecodeError::NonCanonical` rejects a non-strictly-ascending `VersionVector`); `decode_entry_exact` for single-buffer use. `swarm_core::bundle`: `LogBundle` (observer-keyed, then author-keyed, raw signed `Entry` only — no derived state), `Spec` (`mission_id`, `epoch`, `roster`, `budgets`, `log_cap`; unsigned in Phase 1 by design), both with canonical codecs; `State::export_bundle()`; `LogBundle::merge`. `swarm-verify` gains `verdict` (`Verdict`, `InvariantResult`, `Witness`, `ChainFinding`/`ChainProblem` — every `Violated` carries raw signed `Entry` values, never a formatted string; `input_attestable: bool`, always `false`), `fold` (an independent causal-replay and winner-rule reimplementation — never calls `swarm_core::state::{Claims, Escrow}`, so it structurally cannot inherit a bug planted in that fold, demonstrated against `mutant-i3`), and `verify(bundle, spec) -> Verdict`, checking I1 (cross-observer equivocation scan, each hit re-confirmed via `verify_poe`), I2 (a genuine temporal check via fixed-point replay, stronger than the oracle's final-`causal_vv` check), I3 (`Undetermined` without ≥2 comparable observers, never a vacuous `Satisfied`), and I4 (deduped-by-`(author,seq)` overspend) directly from bundle bytes. The old `check_invariants` is unchanged and kept as the *oracle*; presented in prose as an in-process trust-by-construction checker, not the product surface. New `swarm-verify` binary (`--bundle`, `--spec`, `--json`; exit `0`/`1`/`2`); `swarm-sim`'s `phase1` example gains `--equivocation`/`--export-bundle`/`--export-spec` (byte-identical output with no flags). Six-fixture corpus (`clean`, `equivocation`, `overspend`, `broken_chain`, `missing_node`, `truncated`) with a shared-source regenerator and a reproducibility test. `scripts/verify.sh` gains the `thumbv7em` cross-compile and `cargo clippy -D warnings` steps; `README.md` and `LICENSE` added. |
+
+---
+
+## 20. External verification (M7)
+
+Everything above this section describes a system that can only be checked
+from *inside* the process that ran it: `check_invariants` (now called the
+*oracle*, §20.5) takes a live `&BTreeMap<NodeId, State>`. M7 does not change
+what is checked — I1–I4 mean exactly what §15 says they mean — it changes
+*where* the check can run: from bytes on disk, by a party with no access to
+the process that produced them.
+
+Three terms recur through this section, all from `M7-EXTERNAL-VERIFIER.md`
+§1:
+
+- **Oracle** — a checker that runs from inside the simulation, trusted by
+  construction. `check_invariants` (§20.5) is this, and is honestly
+  presented as this rather than as a product surface.
+- **Verifier** — a function that judges a claim from serialized evidence
+  alone, with no access to the process that produced it. `verify` (§20.5) is
+  this.
+- **Witness** — the minimal evidence carried inside a `Violated` result: raw
+  signed `Entry` values a reader checks independently, never a summary
+  string or a derived value (§20.4).
+
+### 20.1 Decode: the inverse of §8.2's encoders
+
+`swarm_core::codec` adds what §8.2 never needed until now: a decoder for
+every one of §8.2's encoders. `decode_entry`, `decode_version_vector`, and
+`decode_body` are pure `&[u8] -> Result<(T, usize), DecodeError>` functions —
+no I/O, `no_std` + `alloc`, living in `swarm-core` alongside the encoders
+they invert. The `usize` is bytes consumed, so a caller can decode several
+values back to back out of one buffer without knowing any one value's length
+in advance — required by `LogBundle` (§20.2), which packs many entries into
+one file.
+
+**A decoder answers "what do these bytes mean," never "is this correct."**
+Out-of-`seq`-order entries, gaps, and duplicate `seq` within a chain all
+decode without error — whether that is a violation is `verify`'s question
+(§20.5), not the decoder's. This split matters concretely: a duplicate `seq`
+inside a decoded chain is exactly how a proof of equivocation survives the
+round trip to be caught downstream, rather than being rejected as a format
+error before `verify` ever sees it.
+
+**Canonicity of the pieces themselves is not optional, though.** If two
+distinct byte strings could decode to the same `VersionVector`, an attacker
+could manufacture bytes that verify as a second, conflicting signed entry at
+a `(node, seq)` an honest node already holds — a fabricated proof of
+equivocation framing an innocent signer (`DESIGN.md` §7). `decode_version_vector`
+therefore rejects any encoding whose `(NodeId, seq)` components are not
+**strictly** ascending by `NodeId` — equal (a repeated `NodeId`) or
+descending both fail — with `DecodeError::NonCanonical("version_vector_order")`.
+
+`DecodeError` variants:
+
+| Variant | Meaning |
+|---|---|
+| `Truncated` | Fewer bytes were present than the format requires at this point. |
+| `UnknownBodyTag(u8)` | A `Body` tag outside `0x00..=0x02`. There is no "skip what you don't understand": forward compatibility is out of scope for Phase 1 (§5's "Kapsam dışı" in `M7-EXTERNAL-VERIFIER.md`), so an unrecognised tag is an error, full stop. |
+| `BadDomainTag` | The leading bytes do not match `wire::DOMAIN_TAG`. |
+| `TrailingBytes` | Bytes remained after a value expected to consume the whole buffer. `decode_entry` itself never raises this — it reports bytes consumed and lets the caller decide, since `LogBundle`/`Spec` decode many entries out of one buffer and check for trailing bytes only once, after the last one. `decode_entry_exact` is the single-value form that does check, used where a buffer is known to hold exactly one entry (the golden-vector reverse tests). |
+| `NonCanonical(&'static str)` | The bytes do not correspond to the canonical encoding of anything. The string names which rule was violated, for diagnostics; two `NonCanonical` values compare equal only if the reason string matches too, but callers should match on the variant, not the string. |
+| `BadVerifyingKey` | 32 bytes that do not decode to a valid Ed25519 point (used by `Spec`'s roster decoding, §20.3). |
+
+Body tags are written in `codec.rs` as the literals from the table in §8.2,
+independently of `wire::Body::encode`, following the golden vectors'
+existing convention (`tests/golden_vector.rs`'s header comment: "computed
+independently from the spec layout") — an inverse that shares code with the
+thing it inverts can share a bug with it too.
+
+**Testing.** `swarm-core/tests/decode.rs` proves `decode_entry_exact(&e.encoded()) == e`
+for 5000 `proptest`-generated entries (dev-dependency only — the `no_std`
+build carries no new dependency). `swarm-core/src/codec.rs`'s own unit tests
+cover the five canonicity failures by hand-built bytes: out-of-order
+`VersionVector`, a repeated `NodeId`, a truncated entry, trailing bytes (via
+`decode_entry_exact`), and an unknown body tag. All four golden vectors
+(§8.5) are tested in both directions in `tests/golden_vector.rs`: the
+existing forward `encode(known Entry) == pinned hex` tests are joined by
+`decode(pinned hex) == known Entry` — the same fixture, proving the format
+losslessly both ways.
+
+### 20.2 `LogBundle`: the raw evidence
+
+A `LogBundle` is the only thing a node hands to a verifier: raw signed
+`Entry` values, nothing derived. `claims`, `escrow`, `causal_vv` never
+appear — accepting derived state as an input would mean assuming the answer
+to the question `verify` (§20.5) exists to ask.
+
+```rust
+pub struct LogBundle {
+    pub mission_id: [u8; 32],
+    pub epoch: u32,
+    pub views: BTreeMap<NodeId, BTreeMap<NodeId, Vec<Entry>>>,
+}
+```
+
+**Keyed by observer, not only by author.** An earlier shape of this type —
+`chains: BTreeMap<NodeId, Vec<Entry>>`, one chain per author — cannot express
+I3 at all: `Divergence` (§20.4) compares what two different *observers*
+derived from what they each hold, and an author-only bundle has no observers
+in it. It would also only witness equivocation if a single author's "chain"
+were allowed to hold two entries at one `seq`, which is exactly the shape a
+canonical per-author log must reject. `views[observer][author]` is
+`observer`'s own copy of `author`'s chain: two observers may (and, across a
+genuine equivocation, do) hold different entries at the same `(author, seq)`.
+
+**Canonical encoding:**
+
+```text
+b"SWARM_BUNDLE_V1"                 (15 bytes)
+|| mission_id                      (32 bytes)
+|| epoch                           (4 bytes, u32 BE)
+|| view_count                      (2 bytes, u16 BE)
+|| per view, observer strictly ascending by NodeId:
+     observer                      (1 byte)
+     chain_count                   (2 bytes, u16 BE)
+     || per chain, author strictly ascending by NodeId:
+          author                   (1 byte)
+          entry_count              (4 bytes, u32 BE)
+          entry * count            (full canonical Entry encoding, §8.2)
+```
+
+Within a chain, entries are written in whatever order they are held —
+normally an author's `seq` order, but **the decoder does not check it**.
+Disorder, a gap, or a duplicate `seq` inside a decoded chain is a *finding*
+(§20.5's chain check, or I1 itself for a duplicate), not a format error: the
+decoder's job stops at "what do these bytes mean." A duplicate `seq` with
+two different encodings is precisely how a proof of equivocation survives
+the round trip to be caught downstream — rejecting it here would make I1
+unreachable through this format.
+
+**A missing view is normal, not an error.** A node may have crashed, been
+captured, or gone silent — the bundle simply lacks an observer for it, and
+`verify` reports the affected invariants `Undetermined` rather than treating
+absence as either a violation or a clean pass (§20.4, §20.5): silence is
+ambiguous, and the verdict says so honestly instead of guessing.
+
+**`State::export_bundle() -> LogBundle`** produces the single-observer
+bundle for `self.me`, reading only `log` and `origins` — the same two
+fields `State::entries()` already reads (§9.6), grouped by author instead of
+flattened. **`LogBundle::merge(self, other) -> LogBundle`** unions two
+bundles' `views`, for assembling one file that covers a whole run out of
+each node's individual export. Where both sides hold a chain for the same
+`(observer, author)` pair, the longer one wins — two honest exports of the
+same chain can only differ in how much of it each side had seen at export
+time, so the longer is always a superset, never a conflicting alternative.
+An actual conflict at that pair is exactly what I1 exists to catch, inside
+`verify`, downstream of this merge — `merge` does not adjudicate it.
+
+**Testing.** `swarm-core/tests/bundle.rs`: round-trip on a hand-built
+multi-observer, multi-author bundle and on the empty bundle; a real
+two-node simulation run whose `export_bundle()` output encodes, decodes, and
+re-encodes byte-identically; `merge` unioning two single-observer bundles
+and preferring the longer chain on a shared `(observer, author)` pair; and
+the canonicity/format negative cases (bad domain tag, truncated, trailing
+bytes, observers out of order, authors out of order within a view).
+
+### 20.3 `Spec`: the rules to check the evidence against
+
+```rust
+pub struct Spec {
+    pub mission_id: [u8; 32],
+    pub epoch: u32,
+    pub roster: Roster,
+    pub budgets: BTreeMap<NodeId, u64>,
+    pub log_cap: u32,
+}
+```
+
+Before M7, `check_invariants`'s second argument was
+`budgets: &BTreeMap<NodeId, u64>` alone — an ad hoc, unsigned, contextless
+parameter, with `mission_id`, the roster, and the budget map never gathered
+in one place. That made "check this log against a *different* spec" — the
+independence test below — impossible to even state. `Spec` is that one
+place.
+
+**Canonical encoding:**
+
+```text
+b"SWARM_SPEC_V1"                   (13 bytes)
+|| mission_id                      (32 bytes)
+|| epoch                           (4 bytes, u32 BE)
+|| roster_count                    (2 bytes, u16 BE)
+|| (node u8 || verifying_key 32 bytes) * count, strictly ascending by NodeId
+|| budget_count                    (2 bytes, u16 BE)
+|| (node u8 || budget u64 BE) * count, strictly ascending by NodeId
+|| log_cap                         (4 bytes, u32 BE)
+```
+
+A roster key that does not decode to a valid Ed25519 point is
+`DecodeError::BadVerifyingKey`.
+
+**`log_cap` is not decoration.** `verify` (§20.5) enforces
+`chain.len() <= spec.log_cap` per author — the field has a call site from
+the day it exists, per `DESIGN.md` §11.4's rule against unused configuration
+knobs.
+
+**Not signed in Phase 1.** An operator-signed `Spec` is Phase 2
+(`DESIGN.md` §11.4 — nothing is opened before it has a use). The verifier
+assumes the `Spec` it was handed is the right one for the mission; it does
+not authenticate the spec itself. This is a stated limit, not a silent
+assumption: `input_attestable` (§20.4) already carries the honest ceiling
+this implies for the whole verdict.
+
+`mission_id` now flows from `Spec` rather than only from the
+`PHASE1_MISSION_ID` constant — the constant remains the default value
+`swarm-sim` uses, but the path from a real `Spec` to `verify`'s mission-match
+check is open.
+
+**Testing.** `swarm-core/tests/spec.rs`: round-trip (including the empty
+`Spec`) and re-encoding byte-identity; the format/canonicity negative cases
+(bad domain tag, truncated, trailing bytes, roster out of order, budgets out
+of order, a 32-byte value that is not a valid curve point). The
+independence proof — the same bundle verifies clean against its real `Spec`
+and reports an I4 violation against one with a lowered budget — needs
+`verify` and is in `swarm-verify`'s test suite (§20.5), not here.
+
+### 20.4 `Verdict` and `Witness`: a verdict that carries its own evidence
+
+Before M7, the checker's output was:
+
+```rust
+pub struct Violation { pub invariant: &'static str, pub detail: String }
+```
+
+`detail` is formatted text. A reader cannot re-check it independently — they
+can only trust that whatever computed the string got it right, which is
+exactly the trust the whole project exists to remove. `Verdict` replaces
+this for the external surface (`check_invariants`/`Violation` remain, as the
+*oracle*'s own output — §20.5):
+
+```rust
+pub enum InvariantResult {
+    Satisfied,
+    Violated(Box<Witness>),
+    Undetermined(&'static str),
+}
+
+pub enum Witness {
+    Equivocation(Poe),
+    UnmetDependency { observer: NodeId, entry: Entry, missing: (NodeId, u64) },
+    Divergence { a: NodeId, b: NodeId, task: TaskId, winner_a: Option<Claim>, winner_b: Option<Claim> },
+    Overspend { node: NodeId, budget: u64, entries: Vec<Entry> },
+}
+
+pub struct Verdict {
+    pub chains: Vec<ChainFinding>,
+    pub i1: InvariantResult,
+    pub i2: InvariantResult,
+    pub i3: InvariantResult,
+    pub i4: InvariantResult,
+    pub structural_note: &'static str,
+    pub input_attestable: bool,
+}
+```
+
+`Violated` boxes `Witness`: `Poe` alone carries two full `Entry` values, and
+leaving it inline would size every `InvariantResult` — including every
+`Satisfied` one — to the largest witness (`clippy::large_enum_variant`
+catches this; the fix is one word, not a design change).
+
+**Two deltas from a flat "one witness per invariant" design, both forced by
+§20.2's per-observer bundle shape.** `UnmetDependency` names `observer`: with
+per-observer views, the same entry can be timely for one observer and early
+for another, so "unmet" is only meaningful relative to a specific observer's
+replay. And `Verdict` gains `chains: Vec<ChainFinding>`, entirely outside
+I1–I4:
+
+```rust
+pub struct ChainFinding {
+    pub observer: NodeId,
+    pub author: NodeId,
+    pub error: ChainError,   // swarm_core::log::ChainError, reused as-is
+    pub entries: Vec<Entry>,
+}
+```
+
+A chain that fails `verify_chain` (§8.3) — wrong membership, mixed authors,
+wrong mission or epoch, a `seq`/link break, a bad signature — or exceeds
+`spec.log_cap` is not evidence *for or against* an invariant, it is malformed
+evidence. Forcing it into I1–I4 would either hide it or misreport it as one
+of the four; `chains` says it plainly instead. (The E7a fixture corpus's
+`broken_chain.bundle` is exactly this case, and is why the doc's original
+`Verdict` — which had nowhere to put this outcome — needed the addition.)
+
+**The witness rule.** Every `Witness` variant carries the *minimal* raw
+signed `Entry` values that demonstrate the violation, never a summary, a
+hash, or a derived value. A reader must be able to check the signatures
+against `spec.roster` themselves, with no code from this crate in the loop.
+`Witness::Equivocation`'s `Poe` is the model case: `swarm_core::fault::verify_poe(roster, poe)`
+checks it standing completely alone.
+
+**`input_attestable: bool`, always `false` in Phase 1.** Deleting this field
+because "it's always false anyway" is precisely the over-claim the project
+exists to prevent: an absence of rule violations is not evidence that the
+input itself was genuine (a bundle could be internally consistent and still
+be a total fabrication signed by keys nobody vetted). Keeping it as a typed
+field — not a doc comment, not a README caveat — means no future caller can
+silently start reading `all_satisfied()` as "this run definitely happened."
+Nothing in Phase 1 can set it to `true` (§5, "Kapsam dışı": no attestation
+mechanism, including a TEE, is in scope).
+
+**Testing.** `crates/swarm-verify/src/verdict.rs`'s own unit tests: a `Poe`
+built independently, wrapped in `Witness::Equivocation`, still verifies
+against the roster with none of `verdict.rs`'s own code touched — the E4
+acceptance criterion; and `Verdict::all_satisfied`/`any_violated` behave
+correctly on an all-`Satisfied` verdict and on one with `Undetermined`
+results (which count as neither satisfied nor violated).
+
+### 20.5 `verify(bundle, spec) -> Verdict`
+
+```rust
+pub fn verify(bundle: &LogBundle, spec: &Spec) -> Verdict;
+```
+
+`crates/swarm-verify/src/verify.rs`. Reads only its two arguments. No
+simulator, no live `State`, no access to the process that produced `bundle`.
+
+**Step 1 — chain verification, per `(observer, author)`.**
+`swarm_core::log::verify_chain(&spec.roster, entries)` (§8.3: membership,
+single-author, mission, epoch, `seq`, link, signature) plus
+`entries.len() <= spec.log_cap`. A chain that fails either check is reported
+as a `ChainFinding` and excluded from every step below — it contributes no
+evidence to I1–I4, because malformed evidence is not evidence for or against
+anything (§20.4). Chains that pass carry their raw `Entry` values forward
+unchanged; nothing derived is computed here yet.
+
+**Step 2 — causal replay, per observer.** `crates/swarm-verify/src/fold.rs`'s
+`causal_replay` takes one observer's chain-verified chains and replays them
+to the fixed point described in §9.3, reimplemented independently rather
+than calling `swarm-core`'s own `drain_buffer`. Because Step 1 already
+guarantees each chain's own `seq` is contiguous from zero, only cross-author
+`deps` are left to resolve. `TaskClaim` entries in application order are
+folded into `swarm-verify`'s own `BTreeMap<TaskId, Vec<Claim>>` — never
+`swarm_core::state::Claims::observe`.
+
+**Why an independent fold, not a call into `swarm_core::state`.** A verifier
+that reconstructs derived state by calling the very code the system under
+test uses for that reconstruction is a mirror, not a second opinion: it can
+agree with a bug as readily as it agrees with correct behaviour, because it
+is running the same computation. `swarm-verify` therefore restates the
+winner rule itself — `winner(task)` is `Claim`'s derived `Ord`, `min` over
+the folded `Vec<Claim>`, written fresh in `verify.rs` — and restates spend
+accounting itself (I4, below), rather than calling
+`swarm_core::state::{Claims, Escrow}`.
+
+**The consequence, stated rather than discovered later.** The `mutant-i3`
+feature breaks the tie-break *inside* `swarm_core::state::Claims::winner`
+(`PHASE1-REMEDIATION.md` A2). `verify` never calls that function, so it
+cannot inherit that bug: on a `mutant-i3` build, the oracle
+(`check_invariants`, below) reports an I3 violation over the tied-claim
+scenario, and `verify` — computing the same winner independently, from
+scratch, off the identical raw entries — still reports `Satisfied`. This is
+not a gap to be closed; it is the entire point of doing the fold twice.
+`crates/swarm-sim/tests/m7_equivalence.rs::verify_does_not_inherit_the_mutant_i3_tie_break`
+demonstrates it directly, unconditionally, on both a clean and a `mutant-i3`
+build — unlike `m6_property.rs::mutant_i3_detection`, it is not expected to
+start failing under the mutant feature, because it asserts what `verify`
+computes, not what the oracle computes.
+
+**I1 — equivocation.** Every chain-verified entry in the whole bundle,
+across every observer and author, is grouped by `(author, seq)`. Two
+differently-encoded entries at the same key are handed to `Poe::new` and
+confirmed with `verify_poe(&spec.roster, &poe)` before being reported —
+`verify` does not trust its own grouping, it re-checks the proof the same
+way an outside reader would. `Undetermined` only when the bundle holds zero
+chain-verified entries anywhere.
+
+**I2 — unmet dependency.** For each observer, any entry [`fold::Replay`]
+could not reach at the fixed point is the witness directly: `first_missing_dep`
+names the first `(origin, seq)` component (ascending by `NodeId`) that
+observer's own held view does not cover. This is the temporal check §7b (E7b)
+asks for, and it is stronger than the pre-M7 `check_i2`
+(`crates/swarm-verify/src/lib.rs`), which tests only the *final* `causal_vv`
+— by the end of a run that vector has grown to cover nearly everything, so
+it catches "the dependency never arrived" but not "this was applied before
+it arrived." A fixed-point replay that cannot reach an entry catches both,
+because it is the same gate `swarm-core`'s own delivery rule (§9.3) applies,
+independently re-run over the raw log. `Undetermined` only when the bundle
+has no observers.
+
+**I3 — divergence.** For every pair of observers whose *applied* `(author,
+seq)` key-sets are identical — the same reasoning the pre-M7 `check_i3` used
+(`crates/swarm-verify/src/lib.rs`): matching by key rather than by full
+entry content is what lets a same-key/different-content pair (an
+equivocation) surface as a derived-state disagreement rather than being
+silently skipped — `winner(task)` is compared for every task either
+observer holds a claim for. The first disagreement found becomes
+`Witness::Divergence`. `Undetermined` when fewer than two observers are
+present, *and* when two or more are present but no pair's key-sets coincide:
+reporting `Satisfied` on zero comparable pairs would claim evidence the
+bundle does not contain, which is exactly the over-claim §20.4's
+`input_attestable` field exists to prevent elsewhere in this same type —
+the same discipline applies here even though nothing forces it structurally.
+This is narrower than the oracle's I3, which additionally compares full
+`Claims` equality (including the withdrawn set); `verify`'s I3 covers
+`winner(task)` agreement, which is `DESIGN.md` §4.2's stated property.
+
+**I4 — overspend.** `Spend` entries from every observer's replay-applied
+entries are deduplicated by `(author, seq)` — the same entry can legitimately
+appear in more than one observer's view — and summed per node. A sum
+exceeding `spec.budgets[node]` is reported with every one of that node's
+`Spend` entries as the witness. `Undetermined` only when the bundle has no
+observers; zero `Spend` activity is `Satisfied`, not `Undetermined` —
+absence of spending is itself sufficient evidence that spending did not
+exceed a budget, unlike I3's need for a comparison pair.
+
+**`check_invariants` remains, unchanged in behaviour, as the oracle.** The
+existing 5000-seed proptests (`crates/swarm-sim/tests/m6_property.rs`) keep
+running against it untouched. It is presented in prose as what it always
+was — a checker trusted by construction because it runs inside the
+simulation it is checking — not as the project's external-facing product
+surface; that role now belongs to `verify`.
+
+**Testing.**
+
+- `crates/swarm-verify/src/fold.rs`: independent chains all applying with no
+  leftover; a satisfied cross-author dependency applying in the right order
+  regardless of map iteration order; a missing cross-author dependency
+  leaving an entry stuck, with `first_missing_dep` naming it correctly.
+- `crates/swarm-verify/tests/verify.rs`: a clean single-observer bundle
+  (I1/I2/I4 `Satisfied`, I3 `Undetermined` — one observer is not two); I1
+  triggered by two observers holding differently-signed entries at the same
+  `(author, seq)`; I2 triggered by an entry whose dependency the bundle
+  never contains; I3 triggered by two observers sharing an `(author, seq)`
+  key-set but holding different content at one key (built via a second,
+  differently-signed copy of one entry — a live equivocation, which
+  necessarily also trips I1, independently checked); I4 triggered by
+  overspend, and the E3 independence proof (§20.3) — the identical bundle
+  clean against a `Spec` with a sufficient budget, violated against one with
+  a lowered budget; a broken signature and an over-`log_cap` chain each
+  reported in `Verdict::chains`, contributing no evidence to any invariant;
+  an entirely empty bundle `Undetermined` on all four.
+- `crates/swarm-sim/tests/m7_equivalence.rs`: the acceptance criterion —
+  5000 random seeds, clean build, `check_invariants(...).is_empty() ==
+  !verify(...).any_violated()` on every one, plus a sanity check that an
+  honest export never produces a `ChainFinding`. Scoped to *violation
+  presence*, not full-output equality, and deliberately not claiming
+  `Undetermined == Satisfied` — see the module's own header comment for why.
+  The `mutant-i3` divergence above is demonstrated separately in the same
+  file, not folded into this 5000-seed run.
+
+### 20.6 The CLI: what a stranger runs
+
+```text
+swarm-verify --bundle <path> --spec <path> [--json]
+```
+
+`crates/swarm-verify/src/bin/swarm-verify.rs`. Argument parsing and JSON
+rendering are both hand-written — no `clap`, no `serde` — the same
+dependency discipline `wire`'s canonical encoding has always followed
+(§8.2): a format this project claims is normative is never handed to a
+general-purpose library to decide the shape of.
+
+**This binary is where file I/O lives.** `swarm-core` stays sans-I/O (§3):
+its decoders take `&[u8]`, never a path. `swarm-verify`'s library crate
+(`verify`, `verdict`, `fold`) also touches no filesystem. Only this binary
+calls `std::fs::read`/`std::fs::write` — exactly the boundary
+`M7-EXTERNAL-VERIFIER.md` §2, item 2 draws.
+
+**Exit codes:** `0` — every invariant `Satisfied` and `Verdict::chains`
+empty. `1` — at least one invariant `Violated`, or at least one
+`ChainFinding`. `2` — a usage, file, or decode error (missing argument,
+unreadable file, malformed bundle or spec). `Undetermined` alone never
+changes the exit code, but is always printed — a verdict that quietly
+downgraded "I don't know" to a passing exit code would reintroduce exactly
+the over-claim `input_attestable` (§20.4) exists to prevent. Every run,
+human or `--json`, prints `input_attestable: false (Phase 1 — no input
+attestation)` unconditionally.
+
+**JSON.** Every raw `Entry` referenced anywhere in the output — inside a
+`Witness`, inside a `ChainFinding` — is rendered as `{"author", "seq",
+"hex"}`, where `hex` is that entry's full canonical encoding (§8.2), not a
+summary. A reader can decode and check every one of them independently,
+exactly the discipline `Witness` itself is built on (§20.4).
+
+**`swarm-sim`'s `phase1` example gains three flags**, all optional and
+additive: `--equivocation`, `--export-bundle <path>`, `--export-spec
+<path>`. With none given, the example's behaviour and output are
+byte-identical to the pre-M7 version — verified directly (`diff` against a
+captured run of the previous commit). `--export-bundle`/`--export-spec`
+write, as files, the states this same run already computed — no second
+simulation, no different code path: `export_bundle_for` folds every node's
+own `State::export_bundle()` (§20.2) into one `LogBundle` via `merge`.
+`--equivocation` selects *which* of the example's two built-in scenarios
+gets exported — the honest 5-node cohort (§1-4 of the example's narration)
+by default, or §5's 3-node equivocation scenario when given. Without the
+flag, `swarm-verify` reports every invariant `Satisfied`; with it, I1
+`Violated` — the equivocator is node 2 in that scenario's 3-node roster.
+
+**Testing.** `swarm-verify.rs`'s own unit tests cover argument parsing
+(accepting all three flags, defaulting `--json` to off, rejecting a missing
+`--bundle`/`--spec`, rejecting an unrecognised flag) and the JSON string
+escaper. The exit-criterion scenario itself — §4's real acceptance test —
+is run by hand end to end, not simulated in a unit test: `cargo run -p
+swarm-sim --example phase1 -- --equivocation --export-bundle ...
+--export-spec ...` followed by `cargo run -p swarm-verify -- --bundle ...
+--spec ...` reproduces `I1: Violated (Equivocation by node 2)`, exit `1`,
+exactly as this section and `README.md` state; the same two commands
+without `--equivocation` report every invariant `Satisfied`, exit `0`.
+
+### 20.7 The fixture corpus
+
+`crates/swarm-verify/tests/fixtures/` — six scenarios, each a committed
+`<name>.bundle` / `<name>.spec` pair:
+
+| Fixture | Expected verdict |
+|---|---|
+| `clean` | All four invariants `Satisfied` |
+| `equivocation` | I1 `Violated(Equivocation)` |
+| `overspend` | I4 `Violated(Overspend)` |
+| `broken_chain` | A `ChainFinding` (a tampered signature) — not an I1–I4 result |
+| `missing_node` | I3 `Undetermined` — only one observer's view is present |
+| `truncated` | `LogBundle::decode` fails with `DecodeError::Truncated` before `verify` ever runs |
+
+**This corpus, not this document's prose, is what a second implementation
+is measured against.** Two implementations can agree on every sentence of
+§20.1–§20.6 and still disagree on a byte; a fixed set of files with a fixed
+expected outcome is checkable mechanically, the way the golden vectors
+(§8.5) already are for the wire format alone. The negative cases carry the
+real weight: a corpus of only `clean` would show that the verifier doesn't
+crash, not that it catches anything.
+
+**Provenance.** Every fixture is built by one function in
+`crates/swarm-verify/tests/support/fixture_data.rs` (fixed, seeded keys
+throughout — the same discipline as the golden vectors), included by both
+`crates/swarm-verify/examples/gen_fixtures.rs` (the regenerator:
+`cargo run -p swarm-verify --example gen_fixtures` overwrites the committed
+files) and `tests/fixtures.rs` (which asserts the regenerated bytes equal
+the committed ones). One definition, two consumers — the alternative, a
+regenerator that duplicates the test's own construction logic, is exactly
+the kind of divergence this corpus exists to rule out elsewhere.
+
+**Testing.** `crates/swarm-verify/tests/fixtures.rs`:
+`regenerated_fixtures_match_committed_bytes` (byte-for-byte, all twelve
+files); one test per fixture loading the *committed* bytes (not
+`fixture_data`'s in-memory values — this is what a stranger who cloned the
+repo and never ran the regenerator actually has) and asserting the table
+above.

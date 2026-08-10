@@ -16,6 +16,7 @@ ed25519-dalek = { workspace = true, features = ["alloc"] }
 
 [dev-dependencies]
 ed25519-dalek = { workspace = true, features = ["alloc"] }
+proptest = "1"
 
 [features]
 # Off by default, never enabled in a normal build. Deliberately breaks the

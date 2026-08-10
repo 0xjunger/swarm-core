@@ -5,6 +5,12 @@
 //! An empty `Vec<Violation>` means every checked invariant held — Phase 1's
 //! exit criterion for I1–I4.
 
+pub mod fold;
+pub mod verdict;
+pub mod verify;
+
+pub use verify::verify;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use swarm_core::wire::Body;

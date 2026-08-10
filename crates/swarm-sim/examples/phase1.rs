@@ -8,7 +8,24 @@
 //!
 //! Deterministic and diffable: fixed seeds throughout, no `sleep`, no menu,
 //! no animation, no wall-clock or map-iteration-order dependence. Running it
-//! twice produces byte-identical output.
+//! twice produces byte-identical output. With no flags, output is
+//! byte-identical to the pre-M7 version of this example — the flags below
+//! are additive.
+//!
+//! `docs/spec.md` §20.6's two-command exit scenario:
+//!
+//!   cargo run -p swarm-sim --example phase1 -- --equivocation \
+//!       --export-bundle /tmp/run.bundle --export-spec /tmp/mission.spec
+//!   cargo run -p swarm-verify -- --bundle /tmp/run.bundle --spec /tmp/mission.spec
+//!
+//! `--export-bundle <path> --export-spec <path>` write out, as files, the
+//! states this same run already computed — no second run, no different
+//! code path. `--equivocation` selects *which* of this example's two
+//! scenarios gets exported: the honest 5-node cohort (§1-4) by default, or
+//! §5's 3-node equivocation scenario when the flag is given. Without
+//! `--equivocation`, `swarm-verify` reports every invariant `Satisfied`;
+//! with it, I1 `Violated` — the equivocator is node 2 in that scenario's
+//! roster.
 //!
 //! Two separate simulations make up the story. The first (§1-4 below) is 5
 //! honest nodes; its own `check_invariants` result is the "final" one printed
@@ -27,9 +44,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use swarm_core::bundle::{LogBundle, Spec};
 use swarm_core::fault::verify_poe;
-use swarm_core::wire::Body;
-use swarm_core::{Envelope, NodeId};
+use swarm_core::wire::{Body, PHASE1_EPOCH, PHASE1_MISSION_ID};
+use swarm_core::{Envelope, NodeId, State};
 use swarm_sim::demo::{BLD, CYN, DIM, GRN, RED, RST, YEL};
 use swarm_sim::sim::{build_roster, Equivocation};
 use swarm_sim::{run_with_states, Partition, SimConfig, TraceRecord};
@@ -48,7 +66,45 @@ const G: NodeId = NodeId(0);
 const H: NodeId = NodeId(1);
 const F: NodeId = NodeId(2);
 
+/// The three flags this example accepts, all optional and additive — with
+/// none given, this example's behaviour and output are unchanged from
+/// before M7 (module docs, above).
+struct DemoArgs {
+    equivocation: bool,
+    export_bundle: Option<String>,
+    export_spec: Option<String>,
+}
+
+fn parse_demo_args() -> DemoArgs {
+    let mut args = DemoArgs {
+        equivocation: false,
+        export_bundle: None,
+        export_spec: None,
+    };
+    let mut raw = std::env::args().skip(1);
+    while let Some(arg) = raw.next() {
+        match arg.as_str() {
+            "--equivocation" => args.equivocation = true,
+            "--export-bundle" => args.export_bundle = raw.next(),
+            "--export-spec" => args.export_spec = raw.next(),
+            other => eprintln!("warning: ignoring unrecognised argument '{other}'"),
+        }
+    }
+    args
+}
+
+/// Merges every state's own `export_bundle()` into one file-ready
+/// `LogBundle` — the same construction `docs/spec.md` §20.2 describes for
+/// assembling a whole run out of individual per-node exports.
+fn export_bundle_for(states: &BTreeMap<NodeId, State>) -> LogBundle {
+    let mut exports = states.values().map(State::export_bundle);
+    let first = exports.next().expect("at least one node in the roster");
+    exports.fold(first, LogBundle::merge)
+}
+
 fn main() {
+    let demo_args = parse_demo_args();
+
     section(1, "Five nodes, connected, claiming tasks");
     println!(
         "{DIM}nodes n0..n4  ·  every node's first claim is task 0 (`next_task`, `swarm-core/src/lib.rs`)  ·  every node contests it{RST}"
@@ -250,6 +306,44 @@ fn main() {
         std::process::exit(1);
     }
     println!();
+
+    if let (Some(bundle_path), Some(spec_path)) =
+        (&demo_args.export_bundle, &demo_args.export_spec)
+    {
+        let (bundle, roster_ids, budgets, log_cap) = if demo_args.equivocation {
+            (
+                export_bundle_for(&eq_states),
+                vec![G, H, F],
+                eq_cfg.budgets(),
+                eq_cfg.log_cap as u32,
+            )
+        } else {
+            (
+                export_bundle_for(&states),
+                HONEST.to_vec(),
+                cfg.budgets(),
+                cfg.log_cap as u32,
+            )
+        };
+
+        let spec = Spec {
+            mission_id: PHASE1_MISSION_ID,
+            epoch: PHASE1_EPOCH,
+            roster: build_roster(&roster_ids),
+            budgets,
+            log_cap,
+        };
+
+        std::fs::write(bundle_path, bundle.encode())
+            .unwrap_or_else(|e| panic!("failed to write bundle to '{bundle_path}': {e}"));
+        std::fs::write(spec_path, spec.encode())
+            .unwrap_or_else(|e| panic!("failed to write spec to '{spec_path}': {e}"));
+
+        println!(
+            "{DIM}exported {} scenario{RST}  bundle -> {bundle_path}  spec -> {spec_path}",
+            if demo_args.equivocation { "the equivocation" } else { "the honest" }
+        );
+    }
 }
 
 fn own_bodies(n: NodeId, states: &BTreeMap<NodeId, swarm_core::State>) -> Vec<Body> {

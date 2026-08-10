@@ -8,6 +8,7 @@
 
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use swarm_core::causal::VersionVector;
+use swarm_core::codec::decode_entry_exact;
 use swarm_core::wire::{Body, Entry, Hash, UnsignedEntry, PHASE1_EPOCH, PHASE1_MISSION_ID};
 use swarm_core::NodeId;
 
@@ -36,6 +37,16 @@ fn golden_entry() -> swarm_core::wire::Entry {
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The inverse of [`hex`] — `decode_entry_exact` needs real bytes, not the
+/// hex constants pinned in this file (`docs/spec.md` §20.1, §8.5: "the same
+/// fixture, two directions").
+fn unhex(s: &str) -> Vec<u8> {
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("valid hex"))
+        .collect()
 }
 
 /// The pinned signing bytes of the golden entry (`docs/spec.md` §8.2).
@@ -83,6 +94,15 @@ fn golden_vector_pins_the_wire_format() {
         "the full encoding changed — if deliberate, update this file and \
          state the reason in the commit message (DESIGN.md §11.5)"
     );
+}
+
+/// The reverse direction (`docs/spec.md` §20.1): the same fixture, decoded
+/// instead of encoded, must reproduce the exact `Entry` `golden_entry()`
+/// builds.
+#[test]
+fn golden_vector_decodes_back_to_the_entry() {
+    let decoded = decode_entry_exact(&unhex(GOLDEN_ENCODED_HEX)).expect("decodes");
+    assert_eq!(decoded, golden_entry());
 }
 
 #[test]
@@ -181,6 +201,12 @@ fn golden_vector_with_a_non_empty_version_vector() {
     assert!(vk.verify_strict(&e.signing_bytes(), &e.sig).is_ok());
 }
 
+#[test]
+fn golden_vector_with_deps_decodes_back_to_the_entry() {
+    let decoded = decode_entry_exact(&unhex(GOLDEN_ENCODED_HEX_WITH_DEPS)).expect("decodes");
+    assert_eq!(decoded, golden_entry_with_deps());
+}
+
 // ---------------------------------------------------------------------------
 // M3: a third golden vector for the `Withdraw` body (`docs/spec.md` §8.5).
 // Every `Body` variant arrives with a test (`DESIGN.md` §11.4). The two
@@ -250,6 +276,12 @@ fn golden_vector_pins_the_withdraw_body() {
 
     let vk = SigningKey::from_bytes(&GOLDEN_KEY).verifying_key();
     assert!(vk.verify_strict(&e.signing_bytes(), &e.sig).is_ok());
+}
+
+#[test]
+fn golden_vector_withdraw_decodes_back_to_the_entry() {
+    let decoded = decode_entry_exact(&unhex(GOLDEN_ENCODED_HEX_WITHDRAW)).expect("decodes");
+    assert_eq!(decoded, golden_entry_withdraw());
 }
 
 /// A claim and a withdrawal naming the same task must never produce the same
@@ -339,4 +371,10 @@ fn golden_vector_pins_the_spend_body() {
 
     let vk = SigningKey::from_bytes(&GOLDEN_KEY).verifying_key();
     assert!(vk.verify_strict(&e.signing_bytes(), &e.sig).is_ok());
+}
+
+#[test]
+fn golden_vector_spend_decodes_back_to_the_entry() {
+    let decoded = decode_entry_exact(&unhex(GOLDEN_ENCODED_HEX_SPEND)).expect("decodes");
+    assert_eq!(decoded, golden_entry_spend());
 }

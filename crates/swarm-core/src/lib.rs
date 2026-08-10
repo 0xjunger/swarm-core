@@ -30,7 +30,9 @@ extern crate alloc;
 #[cfg(test)]
 extern crate std;
 
+pub mod bundle;
 pub mod causal;
+pub mod codec;
 pub mod fault;
 pub mod log;
 pub mod policy;
@@ -274,6 +276,34 @@ impl State {
             }
         }
         out
+    }
+
+    /// This node's own view of the mission, as a [`bundle::LogBundle`]
+    /// (`docs/spec.md` §20.2): a single-observer bundle keyed at `self.me`,
+    /// reading only `log` and `origins` — nothing derived (`claims`,
+    /// `escrow`, `causal_vv`) is exported, because the verifier rebuilds all
+    /// of it from the raw entries itself.
+    pub fn export_bundle(&self) -> bundle::LogBundle {
+        let mut chains: BTreeMap<NodeId, Vec<wire::Entry>> = BTreeMap::new();
+        for node in self.roster.members() {
+            let author_entries: Vec<wire::Entry> = if node == self.me {
+                self.log.entries().to_vec()
+            } else if let Some(v) = self.origins.get(&node) {
+                v.iter().map(|e| e.entry().clone()).collect()
+            } else {
+                Vec::new()
+            };
+            if !author_entries.is_empty() {
+                chains.insert(node, author_entries);
+            }
+        }
+        let mut views = BTreeMap::new();
+        views.insert(self.me, chains);
+        bundle::LogBundle {
+            mission_id: self.roster.mission_id,
+            epoch: self.roster.epoch,
+            views,
+        }
     }
 }
 
