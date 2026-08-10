@@ -24,6 +24,7 @@ fn main() {
     write(&dir, "equivocation", fixture_data::equivocation());
     write(&dir, "overspend", fixture_data::overspend());
     write(&dir, "broken_chain", fixture_data::broken_chain());
+    write(&dir, "misfiled_chain", fixture_data::misfiled_chain());
     write(&dir, "missing_node", fixture_data::missing_node());
 
     fs::write(dir.join("truncated.bundle"), fixture_data::truncated_bytes())

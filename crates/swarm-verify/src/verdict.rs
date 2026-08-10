@@ -74,6 +74,11 @@ pub enum Witness {
 pub enum ChainProblem {
     Chain(ChainError),
     TooLong { cap: u32, actual: usize },
+    /// The chain was filed under an author key its entries do not claim.
+    /// Not a `ChainError`: §8.3's chain verification only sees a slice of
+    /// entries and has no notion of the key they were filed under, so this
+    /// is a `LogBundle`-level defect (§20.2), reported here.
+    Misfiled { declared: NodeId, actual: NodeId },
 }
 
 /// A chain that failed structural verification.

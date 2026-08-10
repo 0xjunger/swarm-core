@@ -47,6 +47,12 @@ pub struct Replay {
 /// that guarantees each chain's own `seq` is contiguous from zero, so
 /// within-chain order is already settled and only cross-author `deps` are
 /// left to resolve here.
+///
+/// The version vector is bumped by `entry.node`, the signer, never by the
+/// map key `chains` is filed under — `verify_chains` (`verify.rs`) already
+/// guarantees the two agree for every chain reaching here, but keying the
+/// fold off the signer rather than the bundle's structure keeps that true
+/// even if a caller's guarantee ever weakens.
 pub fn causal_replay(chains: &BTreeMap<NodeId, Vec<Entry>>) -> Replay {
     let mut cursor: BTreeMap<NodeId, usize> = chains.keys().map(|&n| (n, 0)).collect();
     let mut vv = VersionVector::new();
@@ -60,7 +66,7 @@ pub fn causal_replay(chains: &BTreeMap<NodeId, Vec<Entry>>) -> Replay {
                 continue;
             };
             if entry.deps.le(&vv) {
-                vv.bump(author, entry.seq);
+                vv.bump(entry.node, entry.seq);
                 applied.push(entry.clone());
                 cursor.insert(author, pos + 1);
                 progressed = true;

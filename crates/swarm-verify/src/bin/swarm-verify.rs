@@ -168,6 +168,10 @@ fn describe_chain_finding(finding: &ChainFinding) -> String {
         ChainProblem::TooLong { cap, actual } => {
             format!("chain length {actual} exceeds spec.log_cap {cap}")
         }
+        ChainProblem::Misfiled { declared, actual } => format!(
+            "chain filed under node {} but signed by node {}",
+            declared.0, actual.0
+        ),
     };
     format!(
         "observer {} author {}: {problem}",
@@ -304,6 +308,10 @@ fn json_chain_finding(finding: &ChainFinding) -> String {
         ChainProblem::Chain(e) => format!("{{\"kind\":\"ChainError\",\"detail\":{}}}", json_string(&format!("{e:?}"))),
         ChainProblem::TooLong { cap, actual } => format!(
             "{{\"kind\":\"TooLong\",\"cap\":{cap},\"actual\":{actual}}}"
+        ),
+        ChainProblem::Misfiled { declared, actual } => format!(
+            "{{\"kind\":\"Misfiled\",\"declared\":{},\"actual\":{}}}",
+            declared.0, actual.0
         ),
     };
     format!(

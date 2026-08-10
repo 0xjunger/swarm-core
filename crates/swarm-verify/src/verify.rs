@@ -51,10 +51,21 @@ pub fn verify(bundle: &LogBundle, spec: &Spec) -> Verdict {
     }
 }
 
-/// Step 1: `verify_chain` (§8.3) plus `spec.log_cap`, per `(observer,
-/// author)`. Chains that pass are carried forward; chains that fail are
-/// reported directly in `Verdict::chains` and excluded from every further
-/// check — malformed evidence is not evidence for or against an invariant.
+/// Step 1: for each `(observer, author)` chain — the misfiling check, then
+/// `verify_chain` (§8.3), then `spec.log_cap`. Chains that pass are carried
+/// forward; chains that fail any of the three are reported directly in
+/// `Verdict::chains` and excluded from every further check — malformed
+/// evidence is not evidence for or against an invariant.
+///
+/// The misfiling check runs first: `chains`' key is `author`, but nothing
+/// about `LogBundle`'s shape guarantees the entries filed under that key
+/// actually claim it — `verify_chain` only ever sees a slice of entries, not
+/// the key it was stored under, so it cannot catch a chain filed under the
+/// wrong author. A bundle could otherwise carry a genuine equivocation whose
+/// second chain is filed under a different author key, evading I1's
+/// `(author, seq)` grouping entirely. Checked before `verify_chain` and
+/// `log_cap` so a misfiled chain is reported as misfiled even when it is
+/// also invalid or too long for another reason.
 fn verify_chains(bundle: &LogBundle, spec: &Spec) -> (VerifiedChains, Vec<ChainFinding>) {
     let mut chains_ok = BTreeMap::new();
     let mut findings = Vec::new();
@@ -62,6 +73,20 @@ fn verify_chains(bundle: &LogBundle, spec: &Spec) -> (VerifiedChains, Vec<ChainF
     for (&observer, chains) in &bundle.views {
         let mut ok_chains = BTreeMap::new();
         for (&author, entries) in chains {
+            if let Some(first) = entries.first() {
+                if first.node != author {
+                    findings.push(ChainFinding {
+                        observer,
+                        author,
+                        error: ChainProblem::Misfiled {
+                            declared: author,
+                            actual: first.node,
+                        },
+                        entries: entries.clone(),
+                    });
+                    continue;
+                }
+            }
             if entries.len() as u64 > spec.log_cap as u64 {
                 findings.push(ChainFinding {
                     observer,
@@ -124,9 +149,9 @@ fn winner(claims: &BTreeMap<TaskId, Vec<Claim>>, task: TaskId) -> Option<Claim> 
 fn check_i1(chains_ok: &VerifiedChains, roster: &Roster) -> InvariantResult {
     let mut by_key: BTreeMap<(NodeId, u64), Vec<Entry>> = BTreeMap::new();
     for chains in chains_ok.values() {
-        for (&author, entries) in chains {
+        for entries in chains.values() {
             for entry in entries {
-                by_key.entry((author, entry.seq)).or_default().push(entry.clone());
+                by_key.entry((entry.node, entry.seq)).or_default().push(entry.clone());
             }
         }
     }

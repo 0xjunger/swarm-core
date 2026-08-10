@@ -155,6 +155,35 @@ pub fn broken_chain() -> (LogBundle, Spec) {
     (log_bundle, spec)
 }
 
+/// A chain filed under an author key its entries do not claim: node F signs
+/// two distinct genesis entries; observer G holds one filed correctly under
+/// F, observer H holds the other filed under a different node, D, entirely.
+/// Every signature verifies, `seq` is contiguous from zero, and the roster
+/// contains the signer — the only thing wrong is the key the second chain
+/// was filed under. `Verdict::chains` must report this as `Misfiled`, not
+/// silently drop it (`docs/spec.md` §20.5).
+pub fn misfiled_chain() -> (LogBundle, Spec) {
+    let (kg, kh, kf, kd) = (key(30), key(31), key(32), key(33));
+    let (g, h, f, d) = (NodeId(0), NodeId(1), NodeId(2), NodeId(3));
+    let genuine = claim(f, 0, Hash::ZERO, 1, &kf);
+    let forged = claim(f, 0, Hash::ZERO, 2, &kf);
+    assert_ne!(genuine.encoded(), forged.encoded());
+
+    let log_bundle = bundle(&[
+        (g, view(&[(f, vec![genuine])])),
+        (h, view(&[(d, vec![forged])])),
+    ]);
+
+    let spec = Spec {
+        mission_id: PHASE1_MISSION_ID,
+        epoch: PHASE1_EPOCH,
+        roster: roster_of(&[(g, &kg), (h, &kh), (f, &kf), (d, &kd)]),
+        budgets: BTreeMap::new(),
+        log_cap: 1000,
+    };
+    (log_bundle, spec)
+}
+
 /// A node whose log never arrived: exactly one observer's view is present.
 /// I3 needs two observers to compare and reports `Undetermined`, not a
 /// violation and not a vacuous `Satisfied` — silence is ambiguous

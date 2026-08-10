@@ -54,6 +54,11 @@ fn regenerated_fixtures_match_committed_bytes() {
             fixture_data::broken_chain().1.encode(),
         ),
         (
+            "misfiled_chain",
+            fixture_data::misfiled_chain().0.encode(),
+            fixture_data::misfiled_chain().1.encode(),
+        ),
+        (
             "missing_node",
             fixture_data::missing_node().0.encode(),
             fixture_data::missing_node().1.encode(),
@@ -129,6 +134,40 @@ fn broken_chain_is_a_chain_finding_not_an_invariant_result() {
     let verdict = verify(&bundle, &spec);
     assert_eq!(verdict.chains.len(), 1);
     assert!(matches!(verdict.chains[0].error, ChainProblem::Chain(_)));
+}
+
+/// Regression test for the misfiled-chain soundness gap: before this fix,
+/// `verify_chains` trusted `LogBundle.views[observer][author]`'s map key
+/// without checking it against the entries filed under it, so a chain
+/// signed by one node but filed under a different author key sailed through
+/// unmarked. `check_i1` then grouped equivocation evidence by that same
+/// unchecked key, so the genuine and forged genesis entries — both signed
+/// by node F, both `seq` 0 — landed in different `(author, seq)` buckets
+/// and were never compared. The bundle produced `chains: []` and
+/// `I1: Satisfied`, with the proof of equivocation sitting unexamined
+/// inside it.
+///
+/// With the fix, the misfiled chain is excluded before any invariant check
+/// runs, exactly like a broken signature or a too-long chain would be. Note
+/// the resulting shape is correct as-is, not a workaround: with the forged
+/// chain excluded, only one genuine entry remains at `(f, 0)`, so I1 is
+/// legitimately `Satisfied` while `chains` is non-empty — `verify` is not
+/// claiming the log is clean, it is refusing to judge evidence it cannot
+/// trust the structure of, and saying so.
+#[test]
+fn a_misfiled_chain_is_reported_and_never_silently_dropped() {
+    let (bundle, spec) = load("misfiled_chain");
+    let verdict = verify(&bundle, &spec);
+
+    assert_eq!(verdict.chains.len(), 1);
+    assert_eq!(
+        verdict.chains[0].error,
+        ChainProblem::Misfiled {
+            declared: swarm_core::NodeId(3),
+            actual: swarm_core::NodeId(2),
+        }
+    );
+    assert!(verdict.any_violated());
 }
 
 #[test]
