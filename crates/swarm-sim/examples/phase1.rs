@@ -294,15 +294,36 @@ fn main() {
         }
     }
 
-    section(6, "The invariant checker's verdict");
+    section(6, "The verdict — reproducible by a stranger holding only two files");
+    println!(
+        "{DIM}the same construction §20.6's two-command scenario uses: bundle assembled from each node's own export_bundle(), checked by swarm-verify::verify — no simulator, no live State{RST}\n"
+    );
+    let honest_bundle = export_bundle_for(&states);
+    let honest_spec = Spec {
+        mission_id: PHASE1_MISSION_ID,
+        epoch: PHASE1_EPOCH,
+        roster: build_roster(&HONEST),
+        budgets: cfg.budgets(),
+        log_cap: cfg.log_cap as u32,
+    };
+    let verdict = swarm_verify::verify(&honest_bundle, &honest_spec);
+    if verdict.all_satisfied() {
+        println!("  {GRN}{BLD}verify: all satisfied{RST}  — I1-I4 all hold, no chain findings");
+    } else {
+        println!("  {RED}{BLD}verify:{RST} {verdict:?}");
+        std::process::exit(1);
+    }
+
     let violations = check_invariants(&states, &cfg.budgets());
     println!(
-        "{DIM}checked over the 5-node partition/claim story above (§1-4) — I1-I4 executable, I5-I6 structural (see DESIGN.md §9 M6){RST}\n"
+        "  {DIM}in-process oracle agrees:{RST} {}",
+        if violations.is_empty() {
+            format!("{GRN}check_invariants: []{RST}")
+        } else {
+            format!("{RED}check_invariants: {violations:?}{RST}")
+        }
     );
-    if violations.is_empty() {
-        println!("  {GRN}{BLD}check_invariants: []{RST}  — I1-I4 all hold, zero violations");
-    } else {
-        println!("  {RED}{BLD}check_invariants:{RST} {violations:?}");
+    if !violations.is_empty() {
         std::process::exit(1);
     }
     println!();
@@ -318,12 +339,7 @@ fn main() {
                 eq_cfg.log_cap as u32,
             )
         } else {
-            (
-                export_bundle_for(&states),
-                HONEST.to_vec(),
-                cfg.budgets(),
-                cfg.log_cap as u32,
-            )
+            (honest_bundle, HONEST.to_vec(), cfg.budgets(), cfg.log_cap as u32)
         };
 
         let spec = Spec {

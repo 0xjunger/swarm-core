@@ -64,6 +64,17 @@ gained its external, file-based surface at M7 (§20): `LogBundle`, `Spec`,
 `Verdict`, and the `swarm-verify` binary. `swarm-net` (Phase 2) does not exist
 yet.
 
+**Two surfaces, one normative.** `swarm-verify` now carries two independent
+checkers of I1–I4: `oracle::check_invariants` (`src/oracle.rs`), which reads
+live `State` from inside a simulation run, and `verify::verify` (`src/verify.rs`,
+§20.5), which judges a `LogBundle`/`Spec` pair with no access to the process
+that produced them. **`verify` is normative** — it is the one that answers
+this project's central claim, that a stranger holding only files reaches the
+same verdict independently. The oracle is retained as `verify`'s differential
+partner and as the host for the `mutant-i3` negative control, which `verify`
+structurally cannot serve (§20.5); it is not a product surface and its
+agreement with `verify` is evidence, not a substitute for `verify` itself.
+
 ---
 
 ## 3. The sans-I/O boundary

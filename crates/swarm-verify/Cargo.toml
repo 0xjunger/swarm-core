@@ -1,7 +1,7 @@
 [package]
 name = "swarm-verify"
 version = "0.1.0"
-description = "Invariant checker for swarm-core. Takes final states from a simulation run and checks I1-I4 (I5/I6 are structural)."
+description = "Independent verification of swarm-core evidence: checks I1-I4 from a LogBundle and Spec alone, with no access to the process that produced them (I5/I6 are structural)."
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true

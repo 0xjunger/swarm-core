@@ -1,7 +1,9 @@
 //! `verify(bundle, spec) -> Verdict` (`docs/spec.md` §20.5): the standalone
-//! judge. No simulator, no live `State`, no access to the process that
-//! produced `bundle` — only the bytes in `bundle`, checked against the
-//! rules in `spec`.
+//! judge, and `swarm-verify`'s normative surface. No simulator, no live
+//! `State`, no access to the process that produced `bundle` — only the
+//! bytes in `bundle`, checked against the rules in `spec`. See
+//! `crate::oracle`'s module doc for why an entirely separate in-process
+//! checker also exists and is not this.
 
 use std::collections::{BTreeMap, BTreeSet};
 
