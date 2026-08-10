@@ -138,7 +138,7 @@ fn i4_holds_under_partition_and_loss_across_seeds() {
 /// scenario as `swarm-verify/tests/i4_negative.rs`, kept here too because
 /// it is the M5 acceptance test's own negative control — proof that
 /// `i4_holds_under_loss_across_a_thousand_seeds` above is not vacuously
-/// green (`PHASE1-REMEDIATION.md` A2). It must call the real checker, not
+/// green (docs/spec.md §15, §1). It must call the real checker, not
 /// just inspect the escrow counter by hand.
 #[test]
 fn i4_check_catches_overspend_in_fabricated_entries() {

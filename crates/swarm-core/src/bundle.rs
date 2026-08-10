@@ -5,8 +5,7 @@
 //! Everything in a `LogBundle` is a raw signed [`Entry`]. No derived field —
 //! no `causal_vv`, no claims, no escrow balance — is ever carried, because
 //! accepting derived state as input is assuming the answer to the question
-//! `verify` exists to ask (`M7-EXTERNAL-VERIFIER.md` §2, item borrowed from
-//! E2).
+//! `verify` exists to ask (§20.5's "why an independent fold").
 
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;

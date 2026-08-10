@@ -57,7 +57,7 @@ pub struct Claims {
     by_task: BTreeMap<TaskId, BTreeSet<Claim>>,
     withdrawn: BTreeSet<(TaskId, NodeId)>,
     /// The observing node's own id. Only read by [`Claims::winner`] under
-    /// the `mutant-i3` feature (`PHASE1-REMEDIATION.md` A2) to simulate a
+    /// the `mutant-i3` feature (docs/spec.md §15, §1) to simulate a
     /// self-preferring tie-break bug; otherwise unused, since the real
     /// winner rule is `Claim`'s `Ord` alone and has no notion of "self".
     #[cfg(feature = "mutant-i3")]
@@ -81,7 +81,7 @@ impl Claims {
     }
 
     /// Records which node owns this `Claims`, for [`Claims::winner`]'s
-    /// `mutant-i3` tie-break (`PHASE1-REMEDIATION.md` A2). Does not exist
+    /// `mutant-i3` tie-break (docs/spec.md §15, §1). Does not exist
     /// outside that feature.
     #[cfg(feature = "mutant-i3")]
     pub(crate) fn set_owner(&mut self, me: NodeId) {
@@ -128,7 +128,7 @@ impl Claims {
     /// restated wrongly.
     pub fn winner(&self, task: TaskId) -> Option<Claim> {
         let set = self.by_task.get(&task)?;
-        // I3 negative control (`PHASE1-REMEDIATION.md` A2): a self-preferring
+        // I3 negative control (docs/spec.md §15, §1): a self-preferring
         // tie-break. Two nodes holding the *same* entry set now derive
         // *different* winners whenever both claimed the task — genuine,
         // node-dependent divergence, not a hand-built fake. Never built into

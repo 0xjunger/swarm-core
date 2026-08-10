@@ -4,7 +4,7 @@
 //!
 //! `mutant_i3_detection` proves the checker catches a real bug: it is the
 //! same test compiled twice, clean and against the `mutant-i3` feature, and
-//! only the mutant build is expected to fail (`PHASE1-REMEDIATION.md` A2).
+//! only the mutant build is expected to fail (docs/spec.md §15, §1).
 
 use proptest::prelude::*;
 
@@ -56,7 +56,7 @@ proptest! {
 /// `next_task` makes task 0 the first thing every node claims) a competing
 /// claim for task 0, exchanges the two resulting entries, and checks what
 /// `check_invariants` says about the result. This test is compiled and run
-/// twice, unmodified (`PHASE1-REMEDIATION.md` A2) — the mutation lives in
+/// twice, unmodified (docs/spec.md §15, §1) — the mutation lives in
 /// `swarm_core::state::Claims::winner`'s tie-break behind `#[cfg(feature =
 /// "mutant-i3")]`, not in this test:
 ///

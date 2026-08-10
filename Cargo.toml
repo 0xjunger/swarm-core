@@ -21,7 +21,7 @@ rand_core = { version = "0.6", default-features = false }
 # because ed25519 signing and BLAKE3 hashing are pervasive in these tests and
 # unoptimised crypto is punishingly slow. Optimizing the whole test build and
 # these three dependency crates specifically brings the full workspace suite
-# to ~2.5 minutes (`PHASE1-REMEDIATION.md` B5).
+# to ~2.5 minutes.
 [profile.test]
 opt-level = 2
 

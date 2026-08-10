@@ -6,7 +6,7 @@
 //!
 //! Only [`Class::Degradable`] actions exist — no type in this crate
 //! implements [`Action`] with [`Class::ExclusiveCostly`] or
-//! [`Class::SafetyCritical`] (`PHASE1-REMEDIATION.md` A4). [`commit`] cannot
+//! [`Class::SafetyCritical`] (docs/spec.md §15). [`commit`] cannot
 //! be called on an action that does not exist; that is I5, structurally
 //! discharged, and the `compile_fail` doctest on [`SafetyCriticalAction`]
 //! is its concrete proof. The certificate types Phase 2 will need
@@ -99,7 +99,7 @@ impl Action for Spend {
 /// Stub only — not implemented in Phase 1.
 ///
 /// I5, made structural rather than executable
-/// (`PHASE1-REMEDIATION.md` A4): `SafetyCriticalAction` does not implement
+/// (docs/spec.md §15): `SafetyCriticalAction` does not implement
 /// [`Action`], so [`commit`] cannot be called on it — there is no `Cert`
 /// type to supply. A safety-critical effect without a valid certificate is
 /// therefore not a runtime state this program can reach; it is a program

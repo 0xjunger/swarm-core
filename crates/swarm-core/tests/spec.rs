@@ -1,10 +1,9 @@
 //! `Spec` round-trips and canonicity (`docs/spec.md` §20.3).
 //!
-//! The independence proof from `M7-EXTERNAL-VERIFIER.md` E3 — the same
-//! bundle verifies clean against its real `Spec` and reports an I4 violation
-//! against one with a lowered budget — needs `swarm-verify::verify`, which
-//! does not exist until E5; that test lives in `swarm-verify`'s own suite
-//! (`docs/spec.md` §20.5), not here.
+//! The independence proof — the same bundle verifies clean against its real
+//! `Spec` and reports an I4 violation against one with a lowered budget —
+//! needs `swarm-verify::verify`, which this crate does not depend on; that
+//! test lives in `swarm-verify`'s own suite (`docs/spec.md` §20.5), not here.
 
 use std::collections::BTreeMap;
 

@@ -454,8 +454,8 @@ fn i4_total_spend_never_exceeds_total_allocation() {
 // I5 — no safety-critical effect without a valid certificate in the log
 // ---------------------------------------------------------------------------
 //
-// Structurally discharged, not executable-checked (`PHASE1-REMEDIATION.md`
-// A4): `Class::SafetyCritical` actions have a non-`()` `Cert` type, and in
+// Structurally discharged, not executable-checked (docs/spec.md §15):
+// `Class::SafetyCritical` actions have a non-`()` `Cert` type, and in
 // Phase 1 `SafetyCriticalAction` does not implement `Action` at all, so no
 // safety-critical effect can be created — not even through a bug, because
 // the compiler rejects it. That claim is proven by the `compile_fail`

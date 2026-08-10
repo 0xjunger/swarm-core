@@ -1,6 +1,8 @@
-//! The demo binaries, folded into one dispatcher (`PHASE1-REMEDIATION.md`
-//! B4). Each scenario is the visible form of an acceptance test already
-//! enforced by `cargo test`; running these demonstrates rather than asserts.
+//! The demo binaries, folded into one dispatcher rather than kept as
+//! separate `examples/*.rs` files, to avoid duplicating the setup code each
+//! scenario shares. Each scenario is the visible form of an acceptance test
+//! already enforced by `cargo test`; running these demonstrates rather than
+//! asserts.
 //!
 //!   cargo run -q -p swarm-sim --example run -- determinism
 //!   cargo run -q -p swarm-sim --example run -- converge

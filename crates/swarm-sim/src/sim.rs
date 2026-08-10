@@ -394,8 +394,7 @@ fn trace_state_diff(trace: &mut Trace, node: NodeId, tick: u64, old: &State, new
 /// the genuine article from anyone, including the equivocator's own later,
 /// honest replies about its own log.
 /// The three pieces of per-run mutable state `emit` needs, bundled so the
-/// function takes one parameter for them instead of three
-/// (`PHASE1-REMEDIATION.md` B5).
+/// function takes one parameter for them instead of three.
 struct Runtime<'a> {
     trace: &'a mut Trace,
     net: &'a mut Network,

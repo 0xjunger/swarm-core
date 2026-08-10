@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The Phase 1 exit gate. Green here means the criteria are met — nothing
-# else does (`PHASE1-REMEDIATION.md` A5, `docs/spec.md`).
+# else does (`docs/spec.md` §1).
 set -euo pipefail
 
 echo "== clean build: every invariant must hold =="

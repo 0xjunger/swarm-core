@@ -5,7 +5,7 @@
 //! [`Entry`] values that show the violation. A reader checks a witness
 //! independently, against the roster alone, never taking `verify`'s word for
 //! it: that is the entire difference between a *verifier* and an *oracle*
-//! (`M7-EXTERNAL-VERIFIER.md` §1).
+//! (`docs/spec.md` §20).
 
 use swarm_core::fault::Poe;
 use swarm_core::log::ChainError;

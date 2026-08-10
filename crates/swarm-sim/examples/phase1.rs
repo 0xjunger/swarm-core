@@ -1,5 +1,5 @@
-//! The Phase 1 exit demo (`DESIGN.md` §9 criterion #2, `PHASE1-REMEDIATION.md`
-//! C1): one scripted, non-interactive run that tells the whole story —
+//! The Phase 1 exit demo (`DESIGN.md` §9 criterion #2, `docs/spec.md` §1):
+//! one scripted, non-interactive run that tells the whole story —
 //! partition, continued work on both sides, a contested claim, healing,
 //! convergence, an equivocator caught without consensus, and the invariant
 //! checker's verdict.

@@ -21,13 +21,12 @@
 
 **Exit gate:** `scripts/verify.sh` is the one command that decides whether
 Phase 1's exit criteria are met. It runs the full workspace test suite, then
-rebuilds `swarm-core` with the `mutant-i3` negative control
-(`PHASE1-REMEDIATION.md` A2) and requires that build to fail — a checker that
-cannot fail on a deliberately broken build is not a checker — then
-cross-compiles `swarm-core` for `thumbv7em-none-eabihf` (proving the `no_std`
-claim, §3.1) and runs `cargo clippy --workspace -- -D warnings`. Green on
-`scripts/verify.sh` means the criteria are met; nothing else in this
-document does.
+rebuilds `swarm-core` with the `mutant-i3` negative control (§15) and
+requires that build to fail — a checker that cannot fail on a deliberately
+broken build is not a checker — then cross-compiles `swarm-core` for
+`thumbv7em-none-eabihf` (proving the `no_std` claim, §3.1) and runs
+`cargo clippy --workspace -- -D warnings`. Green on `scripts/verify.sh`
+means the criteria are met; nothing else in this document does.
 
 **Implemented: M0, M1, M2, M3, M4, M5, M6, M7.** Sections below describe the
 system as it exists today, not as it was at any past milestone. Where a rule
@@ -1166,11 +1165,11 @@ true while the handshake is re-proposed after partition heal.
   Spending beyond budget and calls `swarm-verify::check_invariants` directly
   on the resulting state, asserting it reports an I4 violation — so the
   positive tests are not vacuously passing. The same fabricated-overspend
-  scenario is also `swarm-verify/tests/i4_negative.rs`'s own regression test
-  (`PHASE1-REMEDIATION.md` A1): `check_i4` used to reconstruct each node's
-  budget from the state being checked rather than take it as a parameter,
-  which made the comparison a tautology that could not fail. `check_invariants`
-  now takes `budgets: &BTreeMap<NodeId, u64>` explicitly.
+  scenario is also `swarm-verify/tests/i4_negative.rs`'s own regression test:
+  `check_i4` used to reconstruct each node's budget from the state being
+  checked rather than take it as a parameter, which made the comparison a
+  tautology that could not fail. `check_invariants` now takes
+  `budgets: &BTreeMap<NodeId, u64>` explicitly.
 
 ---
 
@@ -1223,7 +1222,7 @@ snapshot.
 |---|---|---|
 | **I1** | At most one signed entry per `(node, seq)` | **Binding.** Enforced by construction (`seq` = chain length, §8.3) and by verification (§8.3 rule 5 rejects duplicates). Tested in `swarm-core/tests/invariants.rs`, and executable-checked in-process by the oracle, `swarm-verify::check_invariants`, across 5000 random seeds (`swarm-sim/tests/m6_property.rs`). **Also executable-checked externally, from bytes alone, by `swarm-verify::verify` (§20.5)**: every chain-verified entry in a `LogBundle`, grouped by `(author, seq)`, with a second, independent `verify_poe` re-check before any conflict is reported — `crates/swarm-verify/tests/fixtures.rs`'s `equivocation.bundle` (§20.7) is the fixture proof. |
 | **I2** | An entry is not applied before its `deps` are delivered | **Binding.** §9.3's delivery rule is the enforcement; tested in `swarm-core/tests/causal.rs` (buffering, cross-node deps) and `swarm-core/tests/invariants.rs`. Executable-checked in-process by the oracle across 5000 random seeds — but the oracle's `check_i2` tests only the *final* `causal_vv`, which by the end of a run has grown to cover nearly everything: it catches "the dependency never arrived," not "this was applied before it arrived." **`swarm-verify::verify` (§20.5) checks the temporal property properly**: a causal fixed-point replay over the bundle's raw entries, independently reimplemented (`crates/swarm-verify/src/fold.rs`); an entry the replay cannot reach is direct evidence of the violation, not an inference from a monotone summary. The 5000-seed figure is real evidence for I1 and I4 above; for I2 it is evidence only that the oracle's *weaker* check passes, which is why it is not presented as equal-strength proof here — this is a calibration, not a weakness discovered late (the distinction was visible before M7's replay closed it; see §20.5, E7b). |
-| **I3** | Two nodes that have seen the same entry set derive the same state | **Binding, and strengthened at M3.** "Derived state" now means `causal_vv`, the entry set, `claims`, **and `winner(t)` for every task `t`** — not just the version vector. Discharged structurally by §10.3 (set insertion is commutative and idempotent) and §10.5 (losing is monotone); tested in `swarm-core/tests/invariants.rs` and end to end by `swarm-sim/tests/m2_convergence.rs` and `swarm-sim/tests/m3_claim.rs`. Executable-checked in-process by the oracle across 5000 random seeds; the oracle's negative control is the `mutant-i3` cargo feature, which breaks `Claims::winner`'s tie-break to prefer the observing node's own claim — the same test run against that build reports a real I3 violation (`PHASE1-REMEDIATION.md` A2). **`swarm-verify::verify` (§20.5) checks I3 from a `LogBundle` alone**, with no access to any node's live `Claims` — it restates `winner(task)` itself, over its own independently-folded claims, comparing observer pairs whose applied `(author, seq)` key-sets coincide; `Undetermined` rather than `Satisfied` when fewer than two observers, or no two observers' key-sets, are comparable (silence is not evidence). Structurally independent of the oracle's fold in a way that is *demonstrated*, not just argued: `crates/swarm-sim/tests/m7_equivalence.rs::verify_does_not_inherit_the_mutant_i3_tie_break` asserts `verify` still reports I3 `Satisfied` over the tied-claim scenario `mutant_i3_detection` uses — an assertion that holds on both a clean build and a `mutant-i3` one, because `verify` never calls the function that feature changes. |
+| **I3** | Two nodes that have seen the same entry set derive the same state | **Binding, and strengthened at M3.** "Derived state" now means `causal_vv`, the entry set, `claims`, **and `winner(t)` for every task `t`** — not just the version vector. Discharged structurally by §10.3 (set insertion is commutative and idempotent) and §10.5 (losing is monotone); tested in `swarm-core/tests/invariants.rs` and end to end by `swarm-sim/tests/m2_convergence.rs` and `swarm-sim/tests/m3_claim.rs`. Executable-checked in-process by the oracle across 5000 random seeds; the oracle's negative control is the `mutant-i3` cargo feature, which breaks `Claims::winner`'s tie-break to prefer the observing node's own claim — the same test run against that build reports a real I3 violation. **`swarm-verify::verify` (§20.5) checks I3 from a `LogBundle` alone**, with no access to any node's live `Claims` — it restates `winner(task)` itself, over its own independently-folded claims, comparing observer pairs whose applied `(author, seq)` key-sets coincide; `Undetermined` rather than `Satisfied` when fewer than two observers, or no two observers' key-sets, are comparable (silence is not evidence). Structurally independent of the oracle's fold in a way that is *demonstrated*, not just argued: `crates/swarm-sim/tests/m7_equivalence.rs::verify_does_not_inherit_the_mutant_i3_tie_break` asserts `verify` still reports I3 `Satisfied` over the tied-claim scenario `mutant_i3_detection` uses — an assertion that holds on both a clean build and a `mutant-i3` one, because `verify` never calls the function that feature changes. |
 | I4 | Spendable rights across all partitions ≤ authorised total | **Binding.** Discharged structurally (§12.4): each node's spending is locally capped, so the global sum is bounded by the sum of per-node caps — no consensus required. Tested in `swarm-core/tests/invariants.rs` (unit), end to end by `swarm-sim/tests/m5_escrow.rs` (1000 seeds with random loss, plus a fabricated-overspend negative control that calls the oracle directly), and executable-checked in-process across 5000 random seeds by `swarm-verify::check_invariants`. **Also executable-checked externally by `swarm-verify::verify`**: `Spend` entries deduped by `(author, seq)` across every observer's replay-applied entries, summed per node against `spec.budgets`; `crates/swarm-verify/tests/verify.rs` includes the E3 independence proof (§20.3) — one bundle, opposite verdicts under a lowered vs. sufficient budget — and `overspend.bundle` (§20.7) is the fixture proof. |
 | I5 | No safety-critical effect without a valid certificate in the log | **Binding, structural — not an executable check.** The `Action` trait does not tie `Cert` to `Class` at the type level — nothing stops a future type from implementing `Action` with `CLASS = SafetyCritical` and `Cert = ()`. What actually holds today is narrower and still real: no type in this crate implements `Action` with `CLASS = SafetyCritical` at all, so `commit` can never be called on one — proven by the `compile_fail` doctest on `policy::SafetyCriticalAction`. Neither the oracle nor `swarm-verify::verify` checks I5; there is nothing at runtime, and nothing in a `LogBundle`, to check (`Verdict::structural_note`, §20.4). |
 | I6 | Every effect is traceable to a signed entry chain | **Binding, structural — not an executable check.** [`policy::author_and_commit`] is the single path through which any `Effect::Send` is created, and it always writes to the log first — a code-structure fact verifiable by reading `policy.rs`, not a property either the oracle or `swarm-verify::verify` runs a check for. |
@@ -1288,6 +1287,9 @@ oversight.
   proof per accused node (§11.3) — so no separate cap was added.
 - **Roster changes mid-run.** Out of scope for all of Phase 1 (`DESIGN.md`
   §7).
+- **Forward-compatible wire format.** No "skip what you don't understand"
+  for unrecognised `Body` tags (§20.1's `DecodeError::UnknownBodyTag`); an
+  unrecognised tag is an error, full stop.
 
 ---
 
@@ -1351,7 +1353,7 @@ concrete proof. `swarm-verify` crate provides an independent invariant checker
 a cargo feature, off by default, that makes `Claims::winner` prefer the
 observing node's own claim — makes the checker report a real I3 violation
 where the clean build reports none; `scripts/verify.sh` runs both directions
-and requires the mutant one to fail (`PHASE1-REMEDIATION.md` A2, A5). The
+and requires the mutant one to fail (§1, §15). The
 `step` cloning cost (§3.3) was revisited and remains acceptable — Phase 4's
 folding scheme depends on the pure signature.
 
@@ -1388,8 +1390,7 @@ what is checked — I1–I4 mean exactly what §15 says they mean — it changes
 *where* the check can run: from bytes on disk, by a party with no access to
 the process that produced them.
 
-Three terms recur through this section, all from `M7-EXTERNAL-VERIFIER.md`
-§1:
+Three terms recur through this section:
 
 - **Oracle** — a checker that runs from inside the simulation, trusted by
   construction. `check_invariants` (§20.5) is this, and is honestly
@@ -1434,7 +1435,7 @@ descending both fail — with `DecodeError::NonCanonical("version_vector_order")
 | Variant | Meaning |
 |---|---|
 | `Truncated` | Fewer bytes were present than the format requires at this point. |
-| `UnknownBodyTag(u8)` | A `Body` tag outside `0x00..=0x02`. There is no "skip what you don't understand": forward compatibility is out of scope for Phase 1 (§5's "Kapsam dışı" in `M7-EXTERNAL-VERIFIER.md`), so an unrecognised tag is an error, full stop. |
+| `UnknownBodyTag(u8)` | A `Body` tag outside `0x00..=0x02`. There is no "skip what you don't understand": forward compatibility is out of scope for Phase 1 (§16), so an unrecognised tag is an error, full stop. |
 | `BadDomainTag` | The leading bytes do not match `wire::DOMAIN_TAG`. |
 | `TrailingBytes` | Bytes remained after a value expected to consume the whole buffer. `decode_entry` itself never raises this — it reports bytes consumed and lets the caller decide, since `LogBundle`/`Spec` decode many entries out of one buffer and check for trailing bytes only once, after the last one. `decode_entry_exact` is the single-value form that does check, used where a buffer is known to hold exactly one entry (the golden-vector reverse tests). |
 | `NonCanonical(&'static str)` | The bytes do not correspond to the canonical encoding of anything. The string names which rule was violated, for diagnostics; two `NonCanonical` values compare equal only if the reason string matches too, but callers should match on the variant, not the string. |
@@ -1723,8 +1724,8 @@ accounting itself (I4, below), rather than calling
 `swarm_core::state::{Claims, Escrow}`.
 
 **The consequence, stated rather than discovered later.** The `mutant-i3`
-feature breaks the tie-break *inside* `swarm_core::state::Claims::winner`
-(`PHASE1-REMEDIATION.md` A2). `verify` never calls that function, so it
+feature (§15, §1) breaks the tie-break *inside*
+`swarm_core::state::Claims::winner`. `verify` never calls that function, so it
 cannot inherit that bug: on a `mutant-i3` build, the oracle
 (`check_invariants`, below) reports an I3 violation over the tied-claim
 scenario, and `verify` — computing the same winner independently, from
@@ -1833,8 +1834,8 @@ general-purpose library to decide the shape of.
 **This binary is where file I/O lives.** `swarm-core` stays sans-I/O (§3):
 its decoders take `&[u8]`, never a path. `swarm-verify`'s library crate
 (`verify`, `verdict`, `fold`) also touches no filesystem. Only this binary
-calls `std::fs::read`/`std::fs::write` — exactly the boundary
-`M7-EXTERNAL-VERIFIER.md` §2, item 2 draws.
+calls `std::fs::read`/`std::fs::write` — the same sans-I/O boundary §3 draws
+for `swarm-core`, held one crate further out.
 
 **Exit codes:** `0` — every invariant `Satisfied` and `Verdict::chains`
 empty. `1` — at least one invariant `Violated`, or at least one

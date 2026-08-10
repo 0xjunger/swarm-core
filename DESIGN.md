@@ -314,7 +314,7 @@ Bunun büyüsü: ağ **hiç** çalışmasa, sürü 5 parçaya bölünse bile, to
 
 **Bitti sayılır:** Rastgele partition/birleşme senaryolarında 1000 farklı seed koşuluyor, I4 hiç ihlal edilmiyor.
 
-**Dürüstlük notu (`PHASE1-REMEDIATION.md` C3):** burada bütçe *transferi* yok
+**Dürüstlük notu:** burada bütçe *transferi* yok
 — `docs/spec.md` §13 bunu kapsam dışı bırakıyor. Yani escrow, `step` içinde
 yerel bir `if remaining >= 1` kontrolüne indirgeniyor, ve I4 sadece bu
 if-cümlesinin doğru olmasından ötürü tutuyor: düğüm-başına sabit, statik
@@ -338,7 +338,7 @@ partner düğüme aktarmak istersem?" sorusunun cevabı Phase 2'de.
 
 I1–I4 çalıştırılabilir kontroller haline getirilip 5000 seed üzerinde koşturuluyor. I5 ve I6 çalıştırılabilir kontrol değil — **yapısal** olarak sağlanıyor (`crates/swarm-core/src/policy.rs`): I5, `SafetyCriticalAction`'ın `Action` trait'ini hiç implemente etmemesiyle — derleyici, sertifikasız bir safety-critical effect üretimini reddediyor, bunu kanıtlayan bir `compile_fail` doctest var. I6, `commit()`'in effect üretebilen tek fonksiyon olmasıyla. İkisi de gerçek argümanlar, ama `swarm-verify`'de koşan bir kontrol değiller — bu ayrım burada net olsun diye yazılıyor.
 
-**Bitti sayılır:** `cargo test` → 5000 seed, sıfır ihlal. Ve bilerek bozulmuş bir versiyonda (I3: winner tie-break'i, entry setini değil gözlemleyen node'u kayıracak şekilde bozuluyor) test **kırılıyor**. Testin bir şeyi gerçekten yakaladığı kanıtlanmalı, yoksa yeşil ışık anlamsız — kanıt: `PHASE1-REMEDIATION.md` A1–A4, `crates/swarm-sim/tests/m6_property.rs::mutant_i3_detection`.
+**Bitti sayılır:** `cargo test` → 5000 seed, sıfır ihlal. Ve bilerek bozulmuş bir versiyonda (I3: winner tie-break'i, entry setini değil gözlemleyen node'u kayıracak şekilde bozuluyor) test **kırılıyor**. Testin bir şeyi gerçekten yakaladığı kanıtlanmalı, yoksa yeşil ışık anlamsız — kanıt: `docs/spec.md` §15, §1, `crates/swarm-sim/tests/m6_property.rs::mutant_i3_detection`.
 
 ---
 
