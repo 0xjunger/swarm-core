@@ -14,6 +14,26 @@ if cargo test --release -p swarm-core --features mutant-i3 \
 fi
 echo "OK: the checker caught the mutant."
 
+echo "== external verification: two commands, no shared memory =="
+workdir="$(mktemp -d)"
+trap 'rm -rf "$workdir"' EXIT
+
+cargo run --release -p swarm-sim --example phase1 -- --equivocation \
+    --export-bundle "$workdir/run.bundle" --export-spec "$workdir/mission.spec"
+
+if cargo run --release -p swarm-verify -- \
+     --bundle "$workdir/run.bundle" --spec "$workdir/mission.spec"; then
+  echo "FAIL: the verifier passed a run containing a known equivocation." >&2
+  exit 1
+fi
+echo "OK: the equivocating run was caught from the files alone."
+
+cargo run --release -p swarm-sim --example phase1 -- \
+    --export-bundle "$workdir/clean.bundle" --export-spec "$workdir/clean.spec"
+cargo run --release -p swarm-verify -- \
+    --bundle "$workdir/clean.bundle" --spec "$workdir/clean.spec"
+echo "OK: the honest run verified from the files alone."
+
 echo "== no_std: swarm-core must cross-compile for a bare-metal target =="
 cargo build -p swarm-core --target thumbv7em-none-eabihf
 
