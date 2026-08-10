@@ -148,12 +148,29 @@ fn winner(claims: &BTreeMap<TaskId, Vec<Claim>>, task: TaskId) -> Option<Claim> 
 /// I1: at most one distinct signed entry per `(author, seq)`, across every
 /// chain-verified entry in the whole bundle. `Undetermined` only when the
 /// bundle holds no chain-verified entries at all.
+///
+/// Keyed by `entry.node`, the signer — not by the bundle's map key — so the
+/// grouping cannot be evaded by filing a chain under the wrong author (X1).
+/// `mutant-verify-i1` (off by default) reintroduces exactly that false
+/// negative, keying by the map key instead. `verify_chains` (above) now
+/// excludes any chain whose map key disagrees with its signer before this
+/// function ever sees it, so in the full pipeline the two keyings are
+/// provably identical — the mutant is unreachable via `verify` end to end.
+/// `tests::check_i1_groups_by_the_signer_not_by_the_map_key`, in this
+/// module, calls this function directly to test the property on its own.
 fn check_i1(chains_ok: &VerifiedChains, roster: &Roster) -> InvariantResult {
     let mut by_key: BTreeMap<(NodeId, u64), Vec<Entry>> = BTreeMap::new();
     for chains in chains_ok.values() {
+        #[cfg(not(feature = "mutant-verify-i1"))]
         for entries in chains.values() {
             for entry in entries {
                 by_key.entry((entry.node, entry.seq)).or_default().push(entry.clone());
+            }
+        }
+        #[cfg(feature = "mutant-verify-i1")]
+        for (&author, entries) in chains {
+            for entry in entries {
+                by_key.entry((author, entry.seq)).or_default().push(entry.clone());
             }
         }
     }
@@ -292,4 +309,70 @@ fn check_i4(
         }
     }
     InvariantResult::Satisfied
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ed25519_dalek::SigningKey;
+    use swarm_core::causal::VersionVector;
+    use swarm_core::wire::{Hash, UnsignedEntry, PHASE1_EPOCH, PHASE1_MISSION_ID};
+
+    fn key(seed: u8) -> SigningKey {
+        let mut bytes = [0u8; 32];
+        bytes[0] = seed;
+        SigningKey::from_bytes(&bytes)
+    }
+
+    fn entry_at(node: NodeId, seq: u64, task: u64, k: &SigningKey) -> Entry {
+        UnsignedEntry {
+            mission_id: PHASE1_MISSION_ID,
+            epoch: PHASE1_EPOCH,
+            node,
+            seq,
+            prev: Hash::ZERO,
+            deps: VersionVector::new(),
+            body: Body::TaskClaim { task, priority: 1 },
+        }
+        .sign(k)
+    }
+
+    /// `check_i1` in isolation, independent of `verify_chains`' misfiling
+    /// filter (X1's other half). That filter now runs unconditionally, so it
+    /// already excludes any chain whose map key disagrees with its entries'
+    /// signer before `check_i1` ever sees it — which means, in the full
+    /// `verify` pipeline, `check_i1`'s own choice of grouping key is
+    /// unreachable: every entry that survives `verify_chains` already has
+    /// `entry.node == author`. This test bypasses `verify_chains` entirely
+    /// and calls `check_i1` directly with a hand-built `VerifiedChains` map
+    /// whose key does not match its entries' signer — a shape a real bundle
+    /// can no longer produce, but a property `check_i1` should hold on its
+    /// own regardless. `mutant-verify-i1` breaks exactly that property; this
+    /// is the only test able to observe the difference, since the full
+    /// pipeline masks it (`docs/spec.md` §20.5).
+    #[test]
+    fn check_i1_groups_by_the_signer_not_by_the_map_key() {
+        let (kg, kf) = (key(1), key(2));
+        let (g, h, f, d) = (NodeId(0), NodeId(1), NodeId(2), NodeId(3));
+        let genuine = entry_at(f, 0, 1, &kf);
+        let forged = entry_at(f, 0, 2, &kf);
+        assert_ne!(genuine.encoded(), forged.encoded());
+
+        let mut chains_ok: VerifiedChains = BTreeMap::new();
+        chains_ok.insert(g, BTreeMap::from([(f, vec![genuine])]));
+        // A shape `verify_chains` no longer lets through: filed under `d`,
+        // signed by `f`.
+        chains_ok.insert(h, BTreeMap::from([(d, vec![forged])]));
+
+        let mut keys = BTreeMap::new();
+        keys.insert(f, kf.verifying_key());
+        keys.insert(g, kg.verifying_key());
+        let roster = Roster::new(PHASE1_MISSION_ID, PHASE1_EPOCH, keys);
+
+        let result = check_i1(&chains_ok, &roster);
+        assert!(
+            matches!(result, InvariantResult::Violated(_)),
+            "expected I1 to catch the equivocation by grouping on the signer, got {result:?}"
+        );
+    }
 }

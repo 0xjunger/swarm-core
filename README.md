@@ -24,10 +24,12 @@ The exit gate for Phase 1 is one command:
 
 It runs the full workspace test suite, rebuilds `swarm-core` with the
 `mutant-i3` negative control and requires that build to fail (a checker that
-cannot fail on a deliberately broken build is not a checker), cross-compiles
-`swarm-core` for `thumbv7em-none-eabihf` to prove the `no_std` claim, and runs
-`cargo clippy --workspace -- -D warnings`. Green means Phase 1's criteria are
-met; nothing else in this repository decides that.
+cannot fail on a deliberately broken build is not a checker), does the same
+for `swarm-verify` with its own `mutant-verify-i1` negative control, runs the
+two-command external-verification scenario below in both directions, then
+cross-compiles `swarm-core` for `thumbv7em-none-eabihf` to prove the `no_std`
+claim, and runs `cargo clippy --workspace -- -D warnings`. Green means Phase
+1's criteria are met; nothing else in this repository decides that.
 
 The external-verification path — the actual point of the project — is two
 commands. The first runs a scripted demo simulation and writes out the log and
@@ -47,9 +49,10 @@ equivocator caught with no consensus at all).
 
 ## Status
 
-**Phase 1.** The wire format, the causal-delivery protocol, the task-claim
-CRDT, equivocation detection, the escrow counter, and the external verifier
-are implemented and tested (see `docs/spec.md` §1 and §18 for the milestone
+**Phase 1 is closed.** The wire format, the causal-delivery protocol, the
+task-claim CRDT, equivocation detection, the escrow counter, and the
+external verifier are implemented and tested, and `scripts/verify.sh` is
+green on a clean checkout (see `docs/spec.md` §1 and §18 for the milestone
 history). What Phase 1 does **not** have: a real network transport
 (`swarm-net`), signed mission specs, MMR-based log pruning, or any field
 validation — everything here has run in simulation only.

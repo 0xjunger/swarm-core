@@ -161,6 +161,20 @@ impl LogBundle {
     /// the longer one is a superset, never a conflicting alternative — an
     /// actual conflict is what I1 exists to catch, downstream in `verify`,
     /// not something this method silently resolves.
+    ///
+    /// **This is a convenience for assembling one file out of several
+    /// honest exports of a single run — it is not a verification step.**
+    /// "Longer wins" assumes both sides are honest; an adversarial input can
+    /// lose evidence through it (a shorter, edited chain presented alongside
+    /// a genuine one that happens to be even shorter would silently win over
+    /// nothing, since there is no third chain to compare against). Nothing
+    /// downstream may treat a merged bundle as authenticated — `verify`
+    /// checks the result the same as any other bundle, no differently.
+    ///
+    /// Also: this `merge` has nothing to do with the prohibited
+    /// `VersionVector::merge` (§0.4 / docs/spec.md §16) — the name collision
+    /// is coincidental but worth flagging so nobody reads this method's
+    /// existence as license to add that one.
     pub fn merge(mut self, other: LogBundle) -> Self {
         assert_eq!(self.mission_id, other.mission_id, "merge: mission_id mismatch");
         assert_eq!(self.epoch, other.epoch, "merge: epoch mismatch");

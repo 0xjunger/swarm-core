@@ -14,6 +14,14 @@ if cargo test --release -p swarm-core --features mutant-i3 \
 fi
 echo "OK: the checker caught the mutant."
 
+echo "== negative control: the verify-I1 mutant MUST fail =="
+if cargo test --release -p swarm-verify --features mutant-verify-i1 \
+     --lib 2>/dev/null; then
+  echo "FAIL: verify did not catch its own deliberately broken build." >&2
+  exit 1
+fi
+echo "OK: the verify mutant was caught."
+
 echo "== external verification: two commands, no shared memory =="
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT

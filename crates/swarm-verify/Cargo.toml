@@ -11,3 +11,13 @@ swarm-core.workspace = true
 
 [dev-dependencies]
 ed25519-dalek = { workspace = true, features = ["alloc"] }
+
+[features]
+# Off by default, never enabled in a normal build. Deliberately breaks
+# `check_i1`'s grouping so it keys by the bundle's map key rather than by
+# the signer — the false negative X1 fixed. `verify_chains` now excludes a
+# misfiled chain before `check_i1` ever runs, so this mutant is unreachable
+# through the full `verify` pipeline; `verify::tests::
+# check_i1_groups_by_the_signer_not_by_the_map_key` calls `check_i1`
+# directly to give `scripts/verify.sh` something real to catch.
+mutant-verify-i1 = []

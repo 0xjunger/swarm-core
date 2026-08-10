@@ -20,13 +20,20 @@
 ## 1. Status
 
 **Exit gate:** `scripts/verify.sh` is the one command that decides whether
-Phase 1's exit criteria are met. It runs the full workspace test suite, then
-rebuilds `swarm-core` with the `mutant-i3` negative control (§15) and
-requires that build to fail — a checker that cannot fail on a deliberately
-broken build is not a checker — then cross-compiles `swarm-core` for
-`thumbv7em-none-eabihf` (proving the `no_std` claim, §3.1) and runs
-`cargo clippy --workspace -- -D warnings`. Green on `scripts/verify.sh`
-means the criteria are met; nothing else in this document does.
+Phase 1's exit criteria are met. In order: the full workspace test suite;
+the `mutant-i3` negative control (§15), a rebuild of `swarm-core` that must
+fail; the `mutant-verify-i1` negative control (§20.5), a rebuild of
+`swarm-verify` that must fail; the two-command external-verification
+scenario (§20.6) in both directions — a run containing a known equivocation
+must be rejected by `swarm-verify`, a clean run must be accepted, both from
+exported files alone; the `thumbv7em-none-eabihf` cross-compile (proving the
+`no_std` claim, §3.1); and `cargo clippy --workspace -- -D warnings`. Green
+on `scripts/verify.sh` means the criteria are met; nothing else in this
+document does.
+
+**Phase 1 is closed.** All six pieces above are green on a clean checkout.
+No new invariant, `Body` variant, or milestone is added under the Phase 1
+label from here — further work is Phase 2 (§16, §17).
 
 **Implemented: M0, M1, M2, M3, M4, M5, M6, M7.** Sections below describe the
 system as it exists today, not as it was at any past milestone. Where a rule
@@ -1657,21 +1664,39 @@ replay. And `Verdict` gains `chains: Vec<ChainFinding>`, entirely outside
 I1–I4:
 
 ```rust
+pub enum ChainProblem {
+    Chain(ChainError),   // swarm_core::log::ChainError, reused as-is
+    TooLong { cap: u32, actual: usize },
+    Misfiled { declared: NodeId, actual: NodeId },
+}
+
 pub struct ChainFinding {
     pub observer: NodeId,
     pub author: NodeId,
-    pub error: ChainError,   // swarm_core::log::ChainError, reused as-is
+    pub error: ChainProblem,
     pub entries: Vec<Entry>,
 }
 ```
 
 A chain that fails `verify_chain` (§8.3) — wrong membership, mixed authors,
-wrong mission or epoch, a `seq`/link break, a bad signature — or exceeds
-`spec.log_cap` is not evidence *for or against* an invariant, it is malformed
-evidence. Forcing it into I1–I4 would either hide it or misreport it as one
-of the four; `chains` says it plainly instead. (The E7a fixture corpus's
-`broken_chain.bundle` is exactly this case, and is why the doc's original
-`Verdict` — which had nowhere to put this outcome — needed the addition.)
+wrong mission or epoch, a `seq`/link break, a bad signature — exceeds
+`spec.log_cap`, or is filed under an author key its entries do not claim
+(`Misfiled`, X1) — is not evidence *for or against* an invariant, it is
+malformed evidence. Forcing it into I1–I4 would either hide it or misreport
+it as one of the four; `chains` says it plainly instead. (The E7a fixture
+corpus's `broken_chain.bundle` and `misfiled_chain.bundle` are exactly this
+case, and are why the doc's original `Verdict` — which had nowhere to put
+this outcome — needed the addition.)
+
+**`Misfiled` is checked first, ahead of `Chain` and `TooLong`.**
+`LogBundle.views[observer][author]` files a chain under `author`, but
+`verify_chain` (§8.3) only ever sees a slice of entries — it has no notion
+of the key the chain was filed under, so it cannot itself catch a chain
+signed by one node but filed under another. Left unchecked, that let a
+genuine equivocation slip past I1 entirely: two validly signed chains from
+the same node at the same `seq`, the second filed under a different author
+key, land in different `(author, seq)` buckets and are never compared. §20.5
+covers the fix in full; `Misfiled` is the finding it reports.
 
 **The witness rule.** Every `Witness` variant carries the *minimal* raw
 signed `Entry` values that demonstrate the violation, never a summary, a
@@ -1706,14 +1731,35 @@ pub fn verify(bundle: &LogBundle, spec: &Spec) -> Verdict;
 `crates/swarm-verify/src/verify.rs`. Reads only its two arguments. No
 simulator, no live `State`, no access to the process that produced `bundle`.
 
-**Step 1 — chain verification, per `(observer, author)`.**
-`swarm_core::log::verify_chain(&spec.roster, entries)` (§8.3: membership,
-single-author, mission, epoch, `seq`, link, signature) plus
-`entries.len() <= spec.log_cap`. A chain that fails either check is reported
-as a `ChainFinding` and excluded from every step below — it contributes no
-evidence to I1–I4, because malformed evidence is not evidence for or against
-anything (§20.4). Chains that pass carry their raw `Entry` values forward
-unchanged; nothing derived is computed here yet.
+**Step 1 — chain verification, per `(observer, author)`.** Three checks, in
+order: the misfiling check, `swarm_core::log::verify_chain(&spec.roster,
+entries)` (§8.3: membership, single-author, mission, epoch, `seq`, link,
+signature), then `entries.len() <= spec.log_cap`. A chain that fails any of
+the three is reported as a `ChainFinding` and excluded from every step
+below — it contributes no evidence to I1–I4, because malformed evidence is
+not evidence for or against anything (§20.4). Chains that pass carry their
+raw `Entry` values forward unchanged; nothing derived is computed here yet.
+
+**The misfiling check, first among the three.** `bundle.views[observer]`
+maps `author` to that author's entries, but nothing about `LogBundle`'s
+shape guarantees the entries filed under a key actually claim it —
+`verify_chain` only ever sees a slice of entries, never the key it was
+stored under, so it cannot catch a chain filed under the wrong author. Before
+this check existed, a bundle could carry a genuine equivocation — two
+distinct validly signed chains from the same node at the same `seq` — with
+the second filed under a *different* author key: every signature verified,
+`seq` was contiguous from zero, `verify_chain` passed, and I1's `(author,
+seq)` grouping never compared the two because they landed in different
+buckets. `verify` reported `I1: Satisfied` with the proof of equivocation
+sitting inside the bundle it had just read — a false negative, the wrong
+direction of error for a verifier to make. The fix: if `entries[0].node !=
+author`, report `ChainProblem::Misfiled { declared: author, actual:
+entries[0].node }` and exclude the chain, before `verify_chain` or `log_cap`
+run — a misfiled chain is reported as misfiled even when it is also invalid
+or too long for another reason. `check_i1` (below) additionally groups by
+`entry.node`, the signer, rather than the map key, as a second, independent
+guard on the same property; §20.4 covers `Misfiled` itself, and the
+`misfiled_chain` fixture (§20.7) is this scenario committed to disk.
 
 **Step 2 — causal replay, per observer.** `crates/swarm-verify/src/fold.rs`'s
 `causal_replay` takes one observer's chain-verified chains and replays them
@@ -1749,19 +1795,37 @@ start failing under the mutant feature, because it asserts what `verify`
 computes, not what the oracle computes.
 
 **I1 — equivocation.** Every chain-verified entry in the whole bundle,
-across every observer and author, is grouped by `(author, seq)`. Two
-differently-encoded entries at the same key are handed to `Poe::new` and
-confirmed with `verify_poe(&spec.roster, &poe)` before being reported —
-`verify` does not trust its own grouping, it re-checks the proof the same
-way an outside reader would. `Undetermined` only when the bundle holds zero
-chain-verified entries anywhere.
+across every observer and author, is grouped by `(entry.node, seq)` — the
+signer, not `bundle.views`' map key (X1). Two differently-encoded entries at
+the same key are handed to `Poe::new` and confirmed with
+`verify_poe(&spec.roster, &poe)` before being reported — `verify` does not
+trust its own grouping, it re-checks the proof the same way an outside
+reader would. `Undetermined` only when the bundle holds zero chain-verified
+entries anywhere.
+
+**`mutant-verify-i1`, the negative control for this grouping, and why it is
+unreachable through `verify` itself.** The `mutant-verify-i1` cargo feature
+(off by default) reverts this grouping to the map key — the exact bug X1
+fixed. But the misfiling check above now runs unconditionally: it already
+excludes any chain whose map key disagrees with its signer before this
+function ever sees it, which means every entry reaching here already has
+`entry.node == author`. Grouping by the signer or by the map key is
+therefore provably identical for anything `verify` actually processes —
+`mutant-verify-i1` cannot be caught by any bundle, however constructed.
+`crates/swarm-verify/src/verify.rs`'s own unit test,
+`check_i1_groups_by_the_signer_not_by_the_map_key`, calls the private
+`check_i1` directly with a hand-built map whose key disagrees with its
+entries' signer — a shape `verify_chains` no longer lets a real bundle
+produce, but a property `check_i1` should hold regardless. That test is
+`scripts/verify.sh`'s negative control for `swarm-verify`'s own code,
+parallel to `mutant-i3`'s for `swarm-core`'s.
 
 **I2 — unmet dependency.** For each observer, any entry [`fold::Replay`]
 could not reach at the fixed point is the witness directly: `first_missing_dep`
 names the first `(origin, seq)` component (ascending by `NodeId`) that
 observer's own held view does not cover. This is the temporal check §7b (E7b)
-asks for, and it is stronger than the pre-M7 `check_i2`
-(`crates/swarm-verify/src/lib.rs`), which tests only the *final* `causal_vv`
+asks for, and it is stronger than the oracle's `check_i2`
+(`crates/swarm-verify/src/oracle.rs`), which tests only the *final* `causal_vv`
 — by the end of a run that vector has grown to cover nearly everything, so
 it catches "the dependency never arrived" but not "this was applied before
 it arrived." A fixed-point replay that cannot reach an entry catches both,
@@ -1769,9 +1833,20 @@ because it is the same gate `swarm-core`'s own delivery rule (§9.3) applies,
 independently re-run over the raw log. `Undetermined` only when the bundle
 has no observers.
 
+**I2 is not reachable from an honest export.** `State::export_bundle` writes
+`log` and `origins` only — never the causal buffer — so an entry an observer
+holds but cannot yet causally reach never leaves the process in the first
+place: honest export only ever emits entries a node has already applied,
+each with its `deps` already satisfied by construction. I2's only coverage
+is therefore hand-constructed bundles (`crates/swarm-verify/tests/verify.rs`'s
+`an_entry_whose_dependency_the_observer_never_holds_triggers_i2`), not
+anything the demo or the two-command scenario (§20.6) can produce. This is a
+true statement about the current design, not a gap to close before Phase 1
+closes.
+
 **I3 — divergence.** For every pair of observers whose *applied* `(author,
-seq)` key-sets are identical — the same reasoning the pre-M7 `check_i3` used
-(`crates/swarm-verify/src/lib.rs`): matching by key rather than by full
+seq)` key-sets are identical — the same reasoning the oracle's `check_i3` uses
+(`crates/swarm-verify/src/oracle.rs`): matching by key rather than by full
 entry content is what lets a same-key/different-content pair (an
 equivocation) surface as a derived-state disagreement rather than being
 silently skipped — `winner(task)` is compared for every task either
@@ -1829,6 +1904,26 @@ surface; that role now belongs to `verify`.
   `Undetermined == Satisfied` — see the module's own header comment for why.
   The `mutant-i3` divergence above is demonstrated separately in the same
   file, not folded into this 5000-seed run.
+- `crates/swarm-verify/tests/fixtures.rs`'s
+  `a_misfiled_chain_is_reported_and_never_silently_dropped` (X1): the
+  `misfiled_chain` fixture (§20.7) produces exactly one `ChainFinding` with
+  `ChainProblem::Misfiled { declared: NodeId(3), actual: NodeId(2) }`, and
+  `verdict.any_violated()` is `true` — with the misfiled chain excluded,
+  only one genuine entry remains at `(f, 0)`, so I1 is legitimately
+  `Satisfied` while `chains` is non-empty. Before the fix, the same bundle
+  produced `chains: []` and `I1: Satisfied` with no indication anything was
+  wrong; this test exists to keep that regression from coming back silently.
+- `crates/swarm-verify/src/verify.rs`'s own unit test,
+  `check_i1_groups_by_the_signer_not_by_the_map_key`: `mutant-verify-i1`'s
+  negative control, described above.
+- `crates/swarm-verify/tests/cli.rs` (X2a): spawns the built `swarm-verify`
+  binary via `CARGO_BIN_EXE_swarm-verify` against every committed fixture —
+  no simulator, no library call, just the process boundary a stranger
+  actually crosses — and asserts the exit-code table in §20.6.
+- `scripts/verify.sh` (X2b): the two-command scenario itself, run both
+  directions — the demo's `--equivocation` export must be rejected by
+  `swarm-verify`, and a clean export must be accepted — both from the
+  exported files alone, no shared process state.
 
 ### 20.6 The CLI: what a stranger runs
 
@@ -1858,6 +1953,22 @@ the over-claim `input_attestable` (§20.4) exists to prevent. Every run,
 human or `--json`, prints `input_attestable: false (Phase 1 — no input
 attestation)` unconditionally.
 
+The contract, as `crates/swarm-verify/tests/cli.rs` (X2a) tests it against
+every committed fixture and the CLI's own argument handling:
+
+| Case | Exit |
+|---|---|
+| `clean` | 0 |
+| `equivocation` | 1 |
+| `overspend` | 1 |
+| `broken_chain` | 1 |
+| `misfiled_chain` (§20.7) | 1 |
+| `missing_node` | 0 — `Undetermined` is not a violation |
+| `truncated` | 2 — decode failure |
+| missing `--spec` argument | 2 |
+| nonexistent bundle path | 2 |
+| `clean` with `--json` | 0 — JSON to stdout, same exit-code rule |
+
 **JSON.** Every raw `Entry` referenced anywhere in the output — inside a
 `Witness`, inside a `ChainFinding` — is rendered as `{"author", "seq",
 "hex"}`, where `hex` is that entry's full canonical encoding (§8.2), not a
@@ -1881,17 +1992,21 @@ flag, `swarm-verify` reports every invariant `Satisfied`; with it, I1
 **Testing.** `swarm-verify.rs`'s own unit tests cover argument parsing
 (accepting all three flags, defaulting `--json` to off, rejecting a missing
 `--bundle`/`--spec`, rejecting an unrecognised flag) and the JSON string
-escaper. The exit-criterion scenario itself — §4's real acceptance test —
-is run by hand end to end, not simulated in a unit test: `cargo run -p
-swarm-sim --example phase1 -- --equivocation --export-bundle ...
---export-spec ...` followed by `cargo run -p swarm-verify -- --bundle ...
---spec ...` reproduces `I1: Violated (Equivocation by node 2)`, exit `1`,
-exactly as this section and `README.md` state; the same two commands
-without `--equivocation` report every invariant `Satisfied`, exit `0`.
+escaper. The exit-code table above is `crates/swarm-verify/tests/cli.rs`
+(X2a), which spawns the built binary against the committed fixtures. The
+exit-criterion scenario itself — §4's real acceptance test — is automated
+in `scripts/verify.sh` (X2b), not run by hand: `cargo run -p swarm-sim
+--example phase1 -- --equivocation --export-bundle ... --export-spec ...`
+followed by `cargo run -p swarm-verify -- --bundle ... --spec ...`
+reproduces `I1: Violated (Equivocation by node 2)`, exit `1`, exactly as
+this section and `README.md` state, and the script fails loudly if it ever
+does not; the same two commands without `--equivocation` report every
+invariant `Satisfied`, exit `0`, and the script fails loudly if that command
+itself fails.
 
 ### 20.7 The fixture corpus
 
-`crates/swarm-verify/tests/fixtures/` — six scenarios, each a committed
+`crates/swarm-verify/tests/fixtures/` — seven scenarios, each a committed
 `<name>.bundle` / `<name>.spec` pair:
 
 | Fixture | Expected verdict |
@@ -1900,6 +2015,7 @@ without `--equivocation` report every invariant `Satisfied`, exit `0`.
 | `equivocation` | I1 `Violated(Equivocation)` |
 | `overspend` | I4 `Violated(Overspend)` |
 | `broken_chain` | A `ChainFinding` (a tampered signature) — not an I1–I4 result |
+| `misfiled_chain` | A `ChainFinding` (`ChainProblem::Misfiled`, X1) — not an I1–I4 result |
 | `missing_node` | I3 `Undetermined` — only one observer's view is present |
 | `truncated` | `LogBundle::decode` fails with `DecodeError::Truncated` before `verify` ever runs |
 
@@ -1922,7 +2038,7 @@ regenerator that duplicates the test's own construction logic, is exactly
 the kind of divergence this corpus exists to rule out elsewhere.
 
 **Testing.** `crates/swarm-verify/tests/fixtures.rs`:
-`regenerated_fixtures_match_committed_bytes` (byte-for-byte, all twelve
+`regenerated_fixtures_match_committed_bytes` (byte-for-byte, all fourteen
 files); one test per fixture loading the *committed* bytes (not
 `fixture_data`'s in-memory values — this is what a stranger who cloned the
 repo and never ran the regenerator actually has) and asserting the table
