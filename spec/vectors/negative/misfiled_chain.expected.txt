@@ -1,0 +1,8 @@
+bundle: misfiled_chain.bundle
+spec: misfiled_chain.spec
+chains: one ChainFinding — observer 1, declared author 3, actual signer 2 (ChainProblem::Misfiled)
+I1: Satisfied — the misfiled chain is excluded before I1 runs; the one genuine entry remaining is not a conflict
+I2: Satisfied
+I3: Undetermined — no two observers share an identical applied entry set
+I4: Satisfied
+exit code (swarm-verify CLI): 1 — a non-empty chains list alone is exit 1, independent of I1-I4

@@ -1,7 +1,7 @@
 //! Seeded, reproducible randomness. The only source of randomness in the project.
 //!
 //! Note where this lives: in the simulator, never in `swarm-core`. `DESIGN.md`
-//! §11.1 requires randomness to be injected, and M0 goes further — the core does
+//! D-002 requires randomness to be injected, and M0 goes further — the core does
 //! not receive any.
 
 use rand_chacha::ChaCha8Rng;
@@ -15,7 +15,7 @@ use rand_core::{RngCore, SeedableRng};
 /// this project has ever recorded without breaking the build.
 ///
 /// Exposes only integer operations. No floating point appears anywhere in the
-/// simulation model — see `docs/spec.md` §5.3.
+/// simulation model.
 pub struct SimRng {
     inner: ChaCha8Rng,
 }
@@ -29,7 +29,7 @@ impl SimRng {
 
     /// Draws the next value. Every draw advances the stream, which is why the
     /// determinism contract fixes *how many* draws happen per effect and in what
-    /// order (`docs/spec.md` §6, rule R2).
+    /// order.
     pub fn next_u32(&mut self) -> u32 {
         self.inner.next_u32()
     }

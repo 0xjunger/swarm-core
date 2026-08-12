@@ -1,4 +1,4 @@
-//! The committed fixture corpus (`docs/spec.md` §20.7, E7a):
+//! The committed fixture corpus (`SPEC.md` §8, E7a):
 //! `crates/swarm-verify/tests/fixtures/*`. This file does two things —
 //! proves the committed bytes are reproducible, and proves each fixture
 //! produces the verdict its name promises. The negative cases carry the

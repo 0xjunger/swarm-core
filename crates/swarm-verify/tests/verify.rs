@@ -1,4 +1,4 @@
-//! `verify(bundle, spec)` (`docs/spec.md` §20.5): hand-built bundles
+//! `verify(bundle, spec)` (`SPEC.md` §7): hand-built bundles
 //! exercising each invariant, both directions, plus `Verdict::chains`.
 //!
 //! `crates/swarm-sim/tests/m7_equivalence.rs` covers the 5000-seed
@@ -42,7 +42,13 @@ fn spec_of(roster: &Roster, budgets: BTreeMap<NodeId, u64>, log_cap: u32) -> Spe
     }
 }
 
-fn claim_at(node: NodeId, seq: u64, prev: Hash, task: u64, k: &SigningKey) -> swarm_core::wire::Entry {
+fn claim_at(
+    node: NodeId,
+    seq: u64,
+    prev: Hash,
+    task: u64,
+    k: &SigningKey,
+) -> swarm_core::wire::Entry {
     UnsignedEntry {
         mission_id: PHASE1_MISSION_ID,
         epoch: PHASE1_EPOCH,
@@ -55,7 +61,13 @@ fn claim_at(node: NodeId, seq: u64, prev: Hash, task: u64, k: &SigningKey) -> sw
     .sign(k)
 }
 
-fn spend_at(node: NodeId, seq: u64, prev: Hash, amount: u64, k: &SigningKey) -> swarm_core::wire::Entry {
+fn spend_at(
+    node: NodeId,
+    seq: u64,
+    prev: Hash,
+    amount: u64,
+    k: &SigningKey,
+) -> swarm_core::wire::Entry {
     UnsignedEntry {
         mission_id: PHASE1_MISSION_ID,
         epoch: PHASE1_EPOCH,
@@ -68,7 +80,10 @@ fn spend_at(node: NodeId, seq: u64, prev: Hash, amount: u64, k: &SigningKey) -> 
     .sign(k)
 }
 
-fn single_view_bundle(observer: NodeId, chains: BTreeMap<NodeId, Vec<swarm_core::wire::Entry>>) -> LogBundle {
+fn single_view_bundle(
+    observer: NodeId,
+    chains: BTreeMap<NodeId, Vec<swarm_core::wire::Entry>>,
+) -> LogBundle {
     let mut views = BTreeMap::new();
     views.insert(observer, chains);
     LogBundle {
@@ -103,7 +118,10 @@ fn a_clean_single_observer_bundle_is_satisfied_on_i1_and_i4_and_undetermined_on_
     assert_eq!(verdict.i4, InvariantResult::Satisfied);
     assert!(!verdict.input_attestable);
     assert!(!verdict.any_violated());
-    assert!(!verdict.all_satisfied(), "I3 undetermined must not read as all-satisfied");
+    assert!(
+        !verdict.all_satisfied(),
+        "I3 undetermined must not read as all-satisfied"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -122,7 +140,8 @@ fn two_observers_holding_conflicting_entries_at_the_same_seq_trigger_i1() {
     let mut chains_f = BTreeMap::new();
     chains_f.insert(NodeId(0), vec![forged]);
 
-    let bundle = single_view_bundle(NodeId(1), chains_g).merge(single_view_bundle(NodeId(2), chains_f));
+    let bundle =
+        single_view_bundle(NodeId(1), chains_g).merge(single_view_bundle(NodeId(2), chains_f));
     let spec = spec_of(&roster, BTreeMap::new(), 100);
 
     let verdict = verify(&bundle, &spec);
@@ -152,7 +171,10 @@ fn an_entry_whose_dependency_the_observer_never_holds_triggers_i2() {
         seq: 0,
         prev: Hash::ZERO,
         deps,
-        body: Body::TaskClaim { task: 1, priority: 1 },
+        body: Body::TaskClaim {
+            task: 1,
+            priority: 1,
+        },
     }
     .sign(&keys[1]);
 
@@ -164,7 +186,9 @@ fn an_entry_whose_dependency_the_observer_never_holds_triggers_i2() {
     let verdict = verify(&bundle, &spec);
     match &verdict.i2 {
         InvariantResult::Violated(w) => match w.as_ref() {
-            Witness::UnmetDependency { observer, missing, .. } => {
+            Witness::UnmetDependency {
+                observer, missing, ..
+            } => {
                 assert_eq!(*observer, NodeId(1));
                 assert_eq!(*missing, (NodeId(0), 0));
             }
@@ -247,7 +271,11 @@ fn spending_beyond_the_spec_budget_triggers_i4() {
     let verdict = verify(&bundle, &spec);
     match &verdict.i4 {
         InvariantResult::Violated(w) => match w.as_ref() {
-            Witness::Overspend { node, budget, entries } => {
+            Witness::Overspend {
+                node,
+                budget,
+                entries,
+            } => {
                 assert_eq!(*node, NodeId(0));
                 assert_eq!(*budget, 3);
                 assert_eq!(entries.len(), 2);
@@ -268,7 +296,7 @@ fn the_same_bundle_is_clean_against_a_spec_with_a_high_enough_budget() {
     chains.insert(NodeId(0), vec![s0, s1]);
     let bundle = single_view_bundle(NodeId(0), chains);
 
-    // Independence proof (`docs/spec.md` §20.3): identical bundle, lowered
+    // Independence proof (`SPEC.md` §4.5): identical bundle, lowered
     // vs. sufficient budget, opposite verdicts.
     let mut low_budgets = BTreeMap::new();
     low_budgets.insert(NodeId(0), 3);

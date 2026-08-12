@@ -1,11 +1,11 @@
-//! The in-process oracle (`DESIGN.md` §M6): takes the final states from a
+//! The in-process oracle (`DESIGN.md` D-009): takes the final states from a
 //! simulation run and checks I1–I4 directly against live `State` values.
 //!
 //! **This is not the normative verifier.** It reads live `State` from the
 //! process that produced it, so it cannot answer the question this project
 //! exists to ask: whether a stranger, holding nothing but bytes on disk, can
 //! reach the same verdict independently. `verify` (`crate::verify`,
-//! `docs/spec.md` §20.5) is the normative surface — it restates the same
+//! `SPEC.md` §7.1) is the normative surface — it restates the same
 //! predicate from a `LogBundle` alone, with no access to any node's live
 //! state.
 //!
@@ -20,8 +20,8 @@
 //!   function and so can inherit the bug, which is exactly what
 //!   `crates/swarm-sim/tests/m6_property.rs` needs to prove the checker
 //!   catches a real regression. `verify` restates the winner rule from
-//!   scratch and structurally cannot inherit that bug (§20.5), so it cannot
-//!   serve as `mutant-i3`'s control — see `mutant-verify-i1` (§20.5)
+//!   scratch and structurally cannot inherit that bug (§7.2), so it cannot
+//!   serve as `mutant-i3`'s control — see `mutant-verify-i1` (§7.2)
 //!   instead.
 //!
 //! An empty `Vec<Violation>` means every checked invariant held — Phase 1's

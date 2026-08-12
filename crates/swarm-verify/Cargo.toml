@@ -5,6 +5,9 @@ description = "Independent verification of swarm-core evidence: checks I1-I4 fro
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+repository.workspace = true
+keywords = ["verification", "distributed-systems", "cryptography"]
+categories = ["cryptography", "command-line-utilities"]
 
 [dependencies]
 swarm-core.workspace = true

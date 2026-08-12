@@ -1,5 +1,4 @@
-//! Invariant tests — written before the code that satisfies them, per
-//! `DESIGN.md` §11.7 ("Sıralamayı ters kur: önce invariant, sonra kod").
+//! Invariant tests — written before the code that satisfies them.
 //!
 //! At M1 only I1 was testable: one node, no network, no CRDT, no escrow.
 //! M2 activates I2 and I3, M4 activates PoE verification for I1's cross-node
@@ -15,7 +14,7 @@ use swarm_core::wire::{Body, Entry, Hash, Roster, UnsignedEntry, PHASE1_EPOCH, P
 use swarm_core::{step, Effect, Envelope, Event, LogicalTime, NodeId, State};
 
 /// Deterministic test key. Keys are injected, never generated: randomness
-/// does not enter `swarm-core` at all (`DESIGN.md` §11.1).
+/// does not enter `swarm-core` at all (`DESIGN.md` D-002).
 fn test_key(seed: u8) -> SigningKey {
     let mut bytes = [0u8; 32];
     bytes[0] = seed;
@@ -37,7 +36,7 @@ fn claim(task: u64) -> Body {
 // ---------------------------------------------------------------------------
 
 /// Construction side: an appended chain never reuses a seq, and seqs are
-/// contiguous from zero. This is crash monotonicity (`DESIGN.md` §4.3) held
+/// contiguous from zero. This is crash monotonicity (`DESIGN.md` D-008) held
 /// structurally — seq is derived from chain length, so there is nothing to
 /// reuse after a crash.
 #[test]
@@ -89,7 +88,7 @@ fn i1_a_duplicated_seq_never_verifies() {
 /// Adversarial side: a node that signs two different entries at the same
 /// `(node, seq)` never gets the second one applied, and the receiver ends up
 /// holding a proof a third party can verify unilaterally
-/// (`docs/spec.md` §11, M4). This is I1 held against a peer that lies, not
+/// (`DESIGN.md` D-007). This is I1 held against a peer that lies, not
 /// just against an honest builder's bug — the two tests above cover
 /// construction and single-chain verification; this one covers what a
 /// receiver does when a roster member equivocates.
@@ -157,7 +156,7 @@ fn m2_roster() -> (Roster, [SigningKey; 3]) {
 }
 
 /// `A`'s chain, built by hand with the self-inclusive `deps` M2 specifies
-/// (`docs/spec.md` §9.2): each entry's `deps` names only its author's own
+/// (`SPEC.md` §4.3): each entry's `deps` names only its author's own
 /// immediate predecessor.
 fn a_chain(a: NodeId, key: &SigningKey) -> [Entry; 3] {
     let e0 = UnsignedEntry {
@@ -213,7 +212,7 @@ fn deliver(state: &State, from: NodeId, entry: Entry, at: u64) -> State {
 // I2 — an entry is not applied before its deps are delivered
 // ---------------------------------------------------------------------------
 
-/// Minimal restatement of I2 as an invariant test: `docs/spec.md` §9.3's
+/// Minimal restatement of I2 as an invariant test: `SPEC.md` §4.3's
 /// delivery rule is what enforces it. `tests/causal.rs`'s
 /// `i2_an_entry_is_not_applied_before_all_its_cross_node_deps_are_delivered`
 /// exercises the harder multi-origin case; this is the one-dependency case,
@@ -275,10 +274,11 @@ fn i3_same_entries_different_arrival_order_converge_to_identical_state() {
     assert_eq!(q_state.buffer_keys().count(), 0, "fully drained");
 }
 
-/// I3 at M3 (`docs/spec.md` §13): "derived state" now means more than the
+/// I3 at M3 (`SPEC.md` §6.3): "derived state" now means more than the
 /// version vector. Two nodes that saw the same entries must hold an identical
 /// claim CRDT **and** name the same winner for every task — the property
-/// M3's acceptance criterion calls "kimse 'ben kazandım' sanmıyor".
+/// that keeps any node from mistakenly believing it has won a task the
+/// group has not actually converged on.
 #[test]
 fn i3_same_entries_different_arrival_order_derive_the_same_claims_and_winner() {
     let (roster, keys) = m2_roster();
@@ -454,7 +454,7 @@ fn i4_total_spend_never_exceeds_total_allocation() {
 // I5 — no safety-critical effect without a valid certificate in the log
 // ---------------------------------------------------------------------------
 //
-// Structurally discharged, not executable-checked (docs/spec.md §15):
+// Structurally discharged, not executable-checked (`SPEC.md` §6.5):
 // `Class::SafetyCritical` actions have a non-`()` `Cert` type, and in
 // Phase 1 `SafetyCriticalAction` does not implement `Action` at all, so no
 // safety-critical effect can be created — not even through a bug, because

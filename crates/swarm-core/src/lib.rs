@@ -2,20 +2,20 @@
 //!
 //! Everything here is a function of its arguments. There is no network, no clock,
 //! and no randomness inside this crate — time enters as the `now` parameter and
-//! nothing else enters at all. `DESIGN.md` §11.1 states this rule as
-//! non-negotiable, and `docs/spec.md` §3 records how it is enforced.
+//! nothing else enters at all. `DESIGN.md` D-002 states this rule as
+//! non-negotiable and records how it is enforced.
 //!
 //! `#![no_std]` is not decorative. It makes `std::collections::HashMap`
 //! unreachable, and `HashMap`'s hasher is seeded per process, so its iteration
 //! order differs between two runs of the same binary. That is exactly the class of
-//! bug M0's byte-identical-trace criterion exists to catch. See `docs/spec.md` §3.1.
+//! bug M0's byte-identical-trace criterion exists to catch. See `DESIGN.md` D-003.
 //!
 //! # Scope
 //!
 //! M0's placeholder (count-and-echo) and M1's foundation (`Entry`, the hash
 //! chain, an empty `VersionVector`) were superseded at M2, which activated
-//! causal delivery and anti-entropy (`docs/spec.md` §9). **M3** gives the
-//! entries their meaning (`docs/spec.md` §10): a node claims tasks, folds
+//! causal delivery and anti-entropy (`SPEC.md` §4.3). **M3** gives the
+//! entries their meaning (`SPEC.md` §6.3): a node claims tasks, folds
 //! every entry it applies into the task-claim CRDT in [`state`], computes the
 //! deterministic winner of each task, and publishes a [`wire::Body::Withdraw`]
 //! record for any task it claimed and lost. [`log`] is unchanged from M1;
@@ -52,21 +52,20 @@ use wire::{Body, Hash, Roster, VerifiedEntry};
 /// A member of the roster.
 ///
 /// The roster (the swarm's member list) is fixed at mission start for the whole of
-/// Phase 1 — `DESIGN.md` §7 notes that dynamic membership is where 90% of the
-/// complexity comes from. `u8` is sufficient: §4.5 caps certificate rosters at
-/// N <= 20.
+/// Phase 1 — `DESIGN.md` D-005 notes that dynamic membership is where 90% of the
+/// complexity comes from. `u8` is sufficient: rosters are capped at N <= 20.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct NodeId(pub u8);
 
 /// The only notion of time in this system.
 ///
-/// There is no wall clock at any layer. `DESIGN.md` §7 forbids tie-breaking on
+/// There is no wall clock at any layer. `DESIGN.md` D-002 forbids tie-breaking on
 /// wall-clock time because GPS time can be spoofed, which would hand claim races to
 /// an attacker. Time enters only as this parameter to [`step`].
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct LogicalTime(pub u64);
 
-/// What a message carries (`docs/spec.md` §9.1).
+/// What a message carries.
 ///
 /// Replaces M0/M1's `Payload` token: nodes now broadcast real entries and
 /// exchange version vectors rather than echoing an opaque counter. Not
@@ -78,15 +77,15 @@ pub enum Envelope {
     Entry(wire::Entry),
     /// An anti-entropy advertisement: the sender's own version vector, so
     /// the receiver can compute what the sender is missing and push it
-    /// back (`docs/spec.md` §9.5).
+    /// back.
     AntiEntropy(VersionVector),
 }
 
 /// Something that happened *to* a node. The only input to [`step`].
 ///
-/// Per `DESIGN.md` §11.4, no variant is added before a test exercises it.
+/// No variant is added before a test exercises it.
 /// M2 dispatches anti-entropy through [`Envelope`] rather than adding a
-/// third `Event` variant (`docs/spec.md` §9.1) — the shape here is
+/// third `Event` variant — the shape here is
 /// unchanged from M0/M1, only `Envelope` replaces `Payload`.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Event {
@@ -106,7 +105,7 @@ pub enum Effect {
 }
 
 /// An entry received but not yet applied: its causal dependencies are not
-/// all delivered yet (`docs/spec.md` §9.4).
+/// all delivered yet (`DESIGN.md` D-013).
 #[derive(Clone, PartialEq, Eq, Debug)]
 struct BufferedEntry {
     /// The tick at which this node first saw the entry — used only to pick
@@ -118,7 +117,7 @@ struct BufferedEntry {
 
 /// Everything a node knows.
 ///
-/// `docs/spec.md` §9.6. Grows further at M3-M5 (CRDTs, escrow). Must stay
+/// Grows further at M3-M5 (CRDTs, escrow). Must stay
 /// `Clone` (and, for the tests below, `PartialEq`), because [`step`] is
 /// pure — see the note on the signature below.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -128,7 +127,7 @@ pub struct State {
     /// Membership, keys, mission id and epoch — fixed for Phase 1.
     roster: Roster,
     /// `roster`'s members excluding `me`, cached ascending by `NodeId`
-    /// (rule R4, `docs/spec.md` §6) so `step` never has to recompute it.
+    /// (`DESIGN.md` D-003) so `step` never has to recompute it.
     members: Vec<NodeId>,
     /// Emit a new entry when `now % entry_period == 0`. Zero disables it.
     entry_period: u64,
@@ -145,22 +144,22 @@ pub struct State {
     /// (Vec index == seq, guaranteed by causal delivery's contiguity).
     origins: BTreeMap<NodeId, Vec<VerifiedEntry>>,
     /// This node's causal version vector: for every node, the highest seq
-    /// applied — including its own (`docs/spec.md` §9.2, self-inclusive).
+    /// applied — including its own (`SPEC.md` §4.3, self-inclusive).
     causal_vv: VersionVector,
     /// Entries whose causal dependencies are not yet satisfied, keyed
     /// `(origin, seq)`. Bounded; oldest dropped on overflow
-    /// (`docs/spec.md` §9.4).
+    /// (`DESIGN.md` D-013).
     buffer: BTreeMap<(NodeId, u64), BufferedEntry>,
     buffer_cap: usize,
     /// The task-claim CRDT, folded from every applied entry
-    /// (`docs/spec.md` §10.3). No cap of its own: bounded transitively by
+    /// (`SPEC.md` §6.3). No cap of its own: bounded transitively by
     /// `log_cap` across the roster, exactly as `origins` is.
     claims: Claims,
     /// Proofs of equivocation this node has independently verified, keyed by
     /// the accused node. Bounded by roster size: at most one proof is kept
-    /// per node, since one is already sufficient (`docs/spec.md` §11, M4).
+    /// per node, since one is already sufficient (`DESIGN.md` D-007).
     poes: BTreeMap<NodeId, Poe>,
-    /// The escrow counter (`docs/spec.md` §13, M5): per-node spending capped
+    /// The escrow counter (`SPEC.md` §6.4, M5): per-node spending capped
     /// by a fixed mission-start allocation. Initialised empty — call
     /// [`Self::with_budgets`] to set allocations before the first Tick.
     escrow: Escrow,
@@ -177,7 +176,7 @@ impl State {
     /// entries against a roster it isn't in, and every peer would silently
     /// reject anything it sent. A zero-capacity buffer is likewise a
     /// configuration error: every structure in this system has a stated,
-    /// usable bound (`DESIGN.md` §7).
+    /// usable bound (`DESIGN.md` D-013).
     pub fn new(
         me: NodeId,
         roster: Roster,
@@ -234,7 +233,7 @@ impl State {
         &self.causal_vv
     }
 
-    /// The task-claim CRDT as this node has derived it (`docs/spec.md` §10.3). Two nodes holding the same entry set hold an identical one — that
+    /// The task-claim CRDT as this node has derived it (`SPEC.md` §6.3). Two nodes holding the same entry set hold an identical one — that
     /// is invariant I3.
     pub fn claims(&self) -> &Claims {
         &self.claims
@@ -247,7 +246,7 @@ impl State {
     }
 
     /// Every equivocation this node has independently verified proof of,
-    /// ascending by the accused `NodeId` (`docs/spec.md` §11, M4).
+    /// ascending by the accused `NodeId` (`DESIGN.md` D-007).
     pub fn poes(&self) -> impl Iterator<Item = &Poe> + '_ {
         self.poes.values()
     }
@@ -257,7 +256,7 @@ impl State {
         self.poes.contains_key(&node)
     }
 
-    /// The escrow counter as this node has derived it (`docs/spec.md` §13,
+    /// The escrow counter as this node has derived it (`SPEC.md` §6.3, §6.4,
     /// M5). Two nodes holding the same entry set hold an identical one — that
     /// is invariant I3 and I4 together.
     pub fn escrow(&self) -> &Escrow {
@@ -265,7 +264,7 @@ impl State {
     }
 
     /// Every entry this node has applied — its own log plus everything
-    /// received — ascending by author then by seq (`docs/spec.md` §9.6).
+    /// received — ascending by author then by seq.
     pub fn entries(&self) -> Vec<&wire::Entry> {
         let mut out = Vec::new();
         for node in self.roster.members() {
@@ -279,7 +278,7 @@ impl State {
     }
 
     /// This node's own view of the mission, as a [`bundle::LogBundle`]
-    /// (`docs/spec.md` §20.2): a single-observer bundle keyed at `self.me`,
+    /// (`SPEC.md` §4.4): a single-observer bundle keyed at `self.me`,
     /// reading only `log` and `origins` — nothing derived (`claims`,
     /// `escrow`, `causal_vv`) is exported, because the verifier rebuilds all
     /// of it from the raw entries itself.
@@ -319,14 +318,14 @@ fn expected_prev(state: &State, origin: NodeId) -> Hash {
 
 /// `true` if `state` has already applied `(node, seq)` or something newer
 /// from `node` — the duplicate/already-known branch of causal delivery
-/// (`docs/spec.md` §9.3).
+/// (`SPEC.md` §4.3).
 fn already_known(state: &State, node: NodeId, seq: u64) -> bool {
     state.causal_vv.highest(node).is_some_and(|k| k >= seq)
 }
 
 /// The entry this node holds at `(node, seq)`, wherever it currently lives:
 /// its own log, an already-applied origin, or the not-yet-satisfied causal
-/// buffer (`docs/spec.md` §11, M4). Equivocation detection must see all
+/// buffer (`DESIGN.md` D-007). Equivocation detection must see all
 /// three, since a conflicting entry can arrive while the first copy is still
 /// sitting unapplied in the buffer.
 fn held_at(state: &State, node: NodeId, seq: u64) -> Option<wire::Entry> {
@@ -347,7 +346,7 @@ fn held_at(state: &State, node: NodeId, seq: u64) -> Option<wire::Entry> {
 /// Checks an incoming entry against whatever this node already holds at the
 /// same `(node, seq)`. If the two conflict and both are validly signed under
 /// the roster, records a proof — self-verifying, needing nothing beyond the
-/// roster (`DESIGN.md` §4.4, `docs/spec.md` §11).
+/// roster (`DESIGN.md` D-007).
 ///
 /// Only the first proof per accused node is kept: one is already sufficient,
 /// and keeping more would grow `poes` without bound over a long run.
@@ -368,8 +367,7 @@ fn detect_equivocation(state: &mut State, incoming: &wire::Entry) {
 
 /// Verifies and applies an entry whose `deps` are already satisfied.
 /// Returns whether it was applied. A verification failure is dropped
-/// silently — defensive only; the honest M2 simulator never triggers it
-/// (`docs/spec.md` §14).
+/// silently — defensive only; the honest M2 simulator never triggers it.
 fn attempt_apply(state: &mut State, entry: wire::Entry) -> bool {
     let prev = expected_prev(state, entry.node);
     let expected_seq = state.causal_vv.highest(entry.node).map_or(0, |s| s + 1);
@@ -387,12 +385,12 @@ fn attempt_apply(state: &mut State, entry: wire::Entry) -> bool {
 
 /// The task this node claims next: the number of claims already in its own
 /// log, so every node walks `0, 1, 2, …` and every task is therefore
-/// contested by every node (`docs/spec.md` §10.6).
+/// contested by every node (`SPEC.md` §6.3).
 ///
 /// Derived rather than counted in a field on purpose: a separate counter
 /// could drift out of step with the log after a refused append, and a derived
 /// value cannot. The scan is over a `log_cap`-bounded vector once per
-/// `entry_period` — `DESIGN.md` §9 declines to optimise this at Phase 1 scale.
+/// `entry_period` — not optimised at Phase 1 scale.
 fn next_task(state: &State) -> TaskId {
     state
         .log
@@ -403,8 +401,8 @@ fn next_task(state: &State) -> TaskId {
 }
 
 /// Authors a `Withdraw` for every task this node claimed, is not winning, and
-/// has not already withdrawn from — ascending by task id (`docs/spec.md`
-/// §10.6). By §10.5 losing is monotone, so each fires at most once per task.
+/// has not already withdrawn from — ascending by task id (`SPEC.md`
+/// §6.3). By the same section, losing is monotone, so each fires at most once per task.
 ///
 /// "Have I already withdrawn?" is asked of the derived state rather than of
 /// the raw log: the only way `(task, me)` enters `withdrawn` is an entry
@@ -431,7 +429,7 @@ fn author_withdrawals(state: &mut State, effects: &mut Vec<Effect>) {
 /// Rescans the causal buffer to a fixed point: repeatedly applies any
 /// buffered entry whose `deps` are now satisfied, restarting after each
 /// success (an apply can unblock others), until one full pass finds nothing
-/// more (`docs/spec.md` §9.3).
+/// more (`SPEC.md` §4.3).
 fn drain_buffer(state: &mut State) {
     loop {
         let ready = state
@@ -447,7 +445,7 @@ fn drain_buffer(state: &mut State) {
 
 /// Inserts an unsatisfied entry into the bounded causal buffer, evicting the
 /// oldest — smallest `(inserted_at, origin, seq)` — entry if full
-/// (`docs/spec.md` §9.4). A re-arriving entry for a key already buffered is
+/// (`DESIGN.md` D-013). A re-arriving entry for a key already buffered is
 /// a no-op: the existing copy (and its `inserted_at`) is kept.
 fn buffer_insert(state: &mut State, key: (NodeId, u64), now: u64, entry: wire::Entry) {
     if state.buffer.contains_key(&key) {
@@ -473,7 +471,7 @@ fn buffer_insert(state: &mut State, key: (NodeId, u64), now: u64, entry: wire::E
 }
 
 /// The entry this node holds at `(origin, seq)`, if any — used to answer an
-/// anti-entropy request (`docs/spec.md` §9.5).
+/// anti-entropy request.
 fn entry_at(state: &State, origin: NodeId, seq: u64) -> Option<&wire::Entry> {
     if origin == state.me {
         state.log.entries().get(seq as usize)
@@ -486,14 +484,14 @@ fn entry_at(state: &State, origin: NodeId, seq: u64) -> Option<&wire::Entry> {
     }
 }
 
-/// The one function. Verbatim from `DESIGN.md` §5.
+/// The one function. Verbatim from `DESIGN.md` D-002.
 ///
 /// Takes `&State` and returns a new `State` rather than mutating in place. That
 /// costs a clone per event, and the cost is accepted on purpose: this is the shape
 /// a folding scheme's step function has (`z_{i+1} = F(z_i, w_i)`), and Phase 4's
 /// claim that `swarm-verify`'s replay becomes a proof without rewriting the circuit
-/// depends on the signature already being this. `docs/spec.md` §3.3 records the cost
-/// and the conditions for revisiting it.
+/// depends on the signature already being this. `DESIGN.md` D-002, D-011 records
+/// the cost and the conditions for revisiting it.
 ///
 /// Determinism: the returned effects are in a fixed order, and the function reads
 /// nothing outside its arguments.
@@ -510,12 +508,12 @@ pub fn step(state: &State, ev: Event, now: LogicalTime) -> (State, Vec<Effect>) 
                     // to do with the entry: a conflicting copy of an
                     // already-applied, already-buffered, or brand-new
                     // `(node, seq)` must be caught in all three cases
-                    // (`docs/spec.md` §11, M4).
+                    // (`DESIGN.md` D-007).
                     detect_equivocation(&mut next, &entry);
                     if already_known(&next, entry.node, entry.seq) {
                         // Duplicate or already superseded — honest re-delivery
                         // (e.g. via anti-entropy) is expected traffic, not an
-                        // error (`docs/spec.md` §9.3).
+                        // error (`SPEC.md` §6.1).
                     } else if entry.deps.le(&next.causal_vv) {
                         if attempt_apply(&mut next, entry) {
                             drain_buffer(&mut next);
@@ -526,10 +524,9 @@ pub fn step(state: &State, ev: Event, now: LogicalTime) -> (State, Vec<Effect>) 
                     }
                 }
                 Envelope::AntiEntropy(their_vv) => {
-                    // Ascending by origin (R4), then ascending by seq within
+                    // Ascending by origin, then ascending by seq within
                     // each origin — advertise-then-push-reply, one round
-                    // trip, no separate request envelope (`docs/spec.md`
-                    // §9.5).
+                    // trip, no separate request envelope.
                     //
                     // `start` overlaps by one with what the peer already
                     // claims to have (`their_vv.highest`, not `+ 1`): a
@@ -538,7 +535,7 @@ pub fn step(state: &State, ev: Event, now: LogicalTime) -> (State, Vec<Effect>) 
                     // rather than only the entries strictly past it. This is
                     // what lets equivocation be detected across a partition
                     // heal even when neither side's vector shows a gap
-                    // (`docs/spec.md` §11, M4).
+                    // (`DESIGN.md` D-007).
                     //
                     // Clamped to `mine`: if the peer's claimed highest for
                     // `origin` is already past what this node itself holds
@@ -563,18 +560,17 @@ pub fn step(state: &State, ev: Event, now: LogicalTime) -> (State, Vec<Effect>) 
             }
         }
         Event::Tick => {
-            // All entry authorship happens here and never in `Recv`
-            // (`docs/spec.md` §10.6): a node that authored while draining its
-            // causal buffer would interleave authorship with the fixed-point
-            // drain of `docs/spec.md` §9.3. The order within the tick is
+            // All entry authorship happens here and never in `Recv`: a node
+            // that authored while draining its causal buffer would
+            // interleave authorship with the fixed-point drain (`SPEC.md`
+            // §6.2). The order within the tick is
             // normative — claim, then withdrawals, then the advertisement.
             if next.entry_period != 0 && now.0.is_multiple_of(next.entry_period) {
                 let claim = policy::TaskClaim {
                     task: next_task(&next),
                     // Fixed for autonomously authored claims: nothing in
                     // Phase 1 produces real priorities, and an unused
-                    // configuration knob is what `DESIGN.md` §11.4 forbids
-                    // (`docs/spec.md` §10.6, §11).
+                    // configuration knob is avoided on principle.
                     priority: 1,
                 };
                 policy::author_and_commit(&mut next, &claim, &(), &mut effects);
@@ -582,7 +578,7 @@ pub fn step(state: &State, ev: Event, now: LogicalTime) -> (State, Vec<Effect>) 
                 // M5: spend 1 unit per authoring tick while budget remains.
                 // can_spend is a local check — no consensus, no handshake.
                 // The per-node cap is what makes I4 hold even in a partition
-                // (`docs/spec.md` §13).
+                // (`SPEC.md` §6.4).
                 if next.escrow.can_spend(next.me, 1) {
                     policy::author_and_commit(
                         &mut next,
@@ -814,7 +810,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // M3 authoring rules (`docs/spec.md` §10.6)
+    // M3 authoring rules (`SPEC.md` §6.3)
     // -----------------------------------------------------------------
 
     /// Extracts the entries a `step` broadcast, deduplicated: the same entry
@@ -835,7 +831,7 @@ mod tests {
     #[test]
     fn a_node_claims_tasks_zero_one_two_in_order() {
         // Every node walks the same task numbering, which is what makes every
-        // task contested (`docs/spec.md` §10.6) — M2 numbered tasks by the
+        // task contested (`SPEC.md` §6.3) — M2 numbered tasks by the
         // author's own seq, so nothing ever collided.
         let (roster, keys) = roster3();
         let mut s = state(NodeId(0), &roster, &keys[0], 10);
@@ -879,7 +875,7 @@ mod tests {
         let (roster, keys) = roster3();
 
         // A claims task 0 first, with an empty `deps` — lc 0, the strongest
-        // possible clock (`docs/spec.md` §10.2).
+        // possible clock (`SPEC.md` §6.3).
         let a = state(NodeId(0), &roster, &keys[0], 10);
         let (_, a_fx) = step(&a, Event::Tick, LogicalTime(10));
         let a0 = authored(&a_fx).remove(0);
@@ -901,7 +897,7 @@ mod tests {
         assert_eq!(c.claims().winner(0).map(|w| w.node), Some(NodeId(0)));
         assert!(
             fx.is_empty(),
-            "authorship never happens in Recv (`docs/spec.md` §10.6)"
+            "authorship never happens in Recv, only in Tick"
         );
         assert!(!c.claims().has_withdrawn(0, NodeId(2)), "not yet — on Tick");
 
@@ -922,7 +918,7 @@ mod tests {
         assert!(c.claims().has_withdrawn(0, NodeId(2)));
 
         // And never again: losing is monotone, so the withdrawal is final
-        // (`docs/spec.md` §10.5).
+        // (`SPEC.md` §6.3).
         let (_, fx) = step(&c, Event::Tick, LogicalTime(30));
         let bodies: Vec<Body> = authored(&fx).iter().map(|e| e.body).collect();
         assert_eq!(

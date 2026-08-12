@@ -1,4 +1,4 @@
-//! M7's acceptance criterion for `verify` (`docs/spec.md` §20.5): across
+//! M7's acceptance criterion for `verify` (`SPEC.md` §7.2): across
 //! 5000 random seeds on a clean build, the in-process oracle
 //! (`swarm_verify::check_invariants`) and the external verifier
 //! (`swarm_verify::verify`, working only from an exported `LogBundle` and
@@ -9,17 +9,15 @@
 //! Satisfied`: `verify`'s I3 check needs two observers whose applied entry
 //! sets coincide, which does not happen for every random seed within the
 //! tick budget below, and reporting `Satisfied` on zero comparable pairs
-//! would claim evidence the bundle does not contain (`docs/spec.md` §20.5).
+//! would claim evidence the bundle does not contain (`SPEC.md` §6.3).
 //! `Undetermined` is not a violation either way, so it never breaks this
 //! equivalence.
 //!
-//! This test is scoped to a clean `swarm-core` build. `docs/spec.md` §20.5
+//! This test is scoped to a clean `swarm-core` build. `DESIGN.md` D-009
 //! records why it cannot extend to `mutant-i3`: `verify` restates the
-//! winner rule itself rather than calling `swarm_core::state::Claims`
-//! (`docs/spec.md` §20.5, "why verify does not call swarm-core's own
-//! fold"), so it structurally cannot inherit a bug planted inside
-//! `Claims::winner` — the two are expected to *disagree* on that build, not
-//! match.
+//! winner rule itself rather than calling `swarm_core::state::Claims`, so
+//! it structurally cannot inherit a bug planted inside `Claims::winner` —
+//! the two are expected to *disagree* on that build, not match.
 
 use proptest::prelude::*;
 
@@ -90,7 +88,7 @@ proptest! {
     }
 }
 
-/// A direct demonstration of `docs/spec.md` §20.5's independence claim: the
+/// A direct demonstration of `DESIGN.md` D-009's independence claim: the
 /// same tied-claim scenario `m6_property.rs::mutant_i3_detection` uses to
 /// prove the oracle catches the `mutant-i3` bug, checked through `verify`
 /// instead. `verify`'s own `winner()` is `Claim`'s derived `Ord` alone — it
@@ -124,11 +122,15 @@ fn verify_does_not_inherit_the_mutant_i3_tie_break() {
 
     let sa0 = State::new(a, roster.clone(), ka, 64, 8, 1, 0);
     let (sa1, fx_a) = step(&sa0, Event::Tick, LogicalTime(1));
-    let Effect::Send { payload: claim_a, .. } = fx_a[0].clone();
+    let Effect::Send {
+        payload: claim_a, ..
+    } = fx_a[0].clone();
 
     let sb0 = State::new(b, roster.clone(), kb, 64, 8, 1, 0);
     let (sb1, fx_b) = step(&sb0, Event::Tick, LogicalTime(1));
-    let Effect::Send { payload: claim_b, .. } = fx_b[0].clone();
+    let Effect::Send {
+        payload: claim_b, ..
+    } = fx_b[0].clone();
 
     let (sa2, _) = step(
         &sa1,

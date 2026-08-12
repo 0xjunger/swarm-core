@@ -1,7 +1,7 @@
 //! Network partitions: which nodes can currently reach which.
 //!
 //! A partition assigns every node to a group. Two nodes can exchange messages if
-//! and only if they share a group. See `docs/spec.md` §5.4.
+//! and only if they share a group.
 
 use std::collections::BTreeMap;
 use swarm_core::NodeId;
@@ -10,7 +10,7 @@ use swarm_core::NodeId;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Partition {
     /// `BTreeMap`, not `HashMap`: iteration order is part of the trace, and
-    /// `HashMap`'s order is nondeterministic. See `docs/spec.md` §3.1.
+    /// `HashMap`'s order is nondeterministic. See `DESIGN.md` D-003.
     groups: BTreeMap<NodeId, u8>,
 }
 

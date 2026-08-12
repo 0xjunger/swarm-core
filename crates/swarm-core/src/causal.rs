@@ -1,8 +1,9 @@
-//! Causal dependencies: the version vector (`DESIGN.md` §4.1, §5).
+//! Causal dependencies: the version vector (`DESIGN.md` D-004, D-002).
 //!
 //! The vector itself arrives at M2, when nodes exchange what they have seen.
 //! At M1 it exists because `Entry::deps` exists — fields are opened now and
-//! filled later (`DESIGN.md`, "Alanları bugünden aç, doldurmayı ertele").
+//! filled later (`DESIGN.md` D-008: fields are "opened early with a fixed
+//! placeholder value specifically to avoid this cost later").
 //! Its canonical encoding, however, is already frozen: the golden vector
 //! pins it in its empty form.
 
@@ -13,9 +14,9 @@ use crate::NodeId;
 
 /// For each node, the highest `seq` seen from it.
 ///
-/// `BTreeMap`, never `HashMap`: ascending-by-`NodeId` iteration is rule R4
-/// (`docs/spec.md` §6), and `NodeId` deliberately does not derive `Hash`
-/// (`docs/spec.md` §3.2).
+/// `BTreeMap`, never `HashMap`: ascending-by-`NodeId` iteration is required
+/// for determinism (`DESIGN.md` D-003), and `NodeId` deliberately does not
+/// derive `Hash` (`DESIGN.md` D-002).
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct VersionVector {
     inner: BTreeMap<NodeId, u64>,
@@ -39,7 +40,7 @@ impl VersionVector {
 
     /// Records that `seq` from `node` has been seen. Defensive: never
     /// regresses an existing higher value, so a caller bug can only fail to
-    /// advance the vector, never roll it back (`docs/spec.md` §9.2).
+    /// advance the vector, never roll it back (`SPEC.md` §4.3).
     pub fn bump(&mut self, node: NodeId, seq: u64) {
         self.inner
             .entry(node)
@@ -47,7 +48,7 @@ impl VersionVector {
             .or_insert(seq);
     }
 
-    /// The causal delivery gate (`docs/spec.md` §9.2-9.3): `true` iff every
+    /// The causal delivery gate (`SPEC.md` §4.3): `true` iff every
     /// component of `self` is present in `other` with a value `>=` its own.
     /// The empty vector is `≤` everything, including itself.
     pub fn le(&self, other: &Self) -> bool {
@@ -59,11 +60,11 @@ impl VersionVector {
     /// The number of entries this vector accounts for: `Σ (seq + 1)` over
     /// every component, since seqs count from zero.
     ///
-    /// This is M3's derived logical clock (`docs/spec.md` §10.2). Read off an
+    /// This is M3's derived logical clock (`SPEC.md` §6.3). Read off an
     /// entry's `deps` it gives "how many entries had this author applied when
     /// it wrote this?", which is strictly increasing along causal order — the
-    /// proof is in the spec. It is the `logical_clock` term of `DESIGN.md`
-    /// §4.2's winner rule, obtained without adding a field to the wire format.
+    /// proof is in the spec. It is the `logical_clock` term of `SPEC.md`
+    /// §6.3's winner rule, obtained without adding a field to the wire format.
     ///
     /// Saturating: an overflow would need more than `u64::MAX` entries, which
     /// the bounded log makes unreachable, but wrapping silently is not a
@@ -74,13 +75,13 @@ impl VersionVector {
             .fold(0u64, |acc, &seq| acc.saturating_add(seq.saturating_add(1)))
     }
 
-    /// Ascending by `NodeId` (rule R4, `docs/spec.md` §6) — `BTreeMap`
+    /// Ascending by `NodeId` (`DESIGN.md` D-003) — `BTreeMap`
     /// iteration order, by construction.
     pub fn iter(&self) -> impl Iterator<Item = (NodeId, u64)> + '_ {
         self.inner.iter().map(|(&n, &s)| (n, s))
     }
 
-    /// Canonical encoding (`docs/spec.md` §8.2): `u16 BE` count, then
+    /// Canonical encoding (`SPEC.md` §5.3): `u16 BE` count, then
     /// `(node u8, seq u64 BE)` pairs ascending by `NodeId` — which is
     /// `BTreeMap` iteration order, so rule R4 holds by construction.
     pub fn encode(&self, out: &mut Vec<u8>) {
@@ -165,7 +166,7 @@ mod tests {
     #[test]
     fn entry_count_grows_with_every_bump() {
         // The property M3's tie-break leans on: applying an entry strictly
-        // increases the clock (`docs/spec.md` §10.2).
+        // increases the clock (`SPEC.md` §6.3).
         let mut vv = VersionVector::new();
         let mut last = vv.entry_count();
         for seq in 0..5 {

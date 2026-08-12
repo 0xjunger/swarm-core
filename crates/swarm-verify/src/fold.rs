@@ -1,4 +1,4 @@
-//! `swarm-verify`'s own fold over raw entries (`docs/spec.md` §20.5).
+//! `swarm-verify`'s own fold over raw entries (`SPEC.md` §7.2).
 //!
 //! Deliberately independent of `swarm_core::state::{Claims, Escrow}`: a
 //! verifier that reconstructs derived state by calling the same code the
@@ -25,10 +25,10 @@ pub struct Replay {
     /// everything else this same observer holds.
     ///
     /// A compliant node only ever stores an entry once its `deps` are
-    /// satisfied (`swarm-core`'s own `attempt_apply`, `docs/spec.md` §9.3),
+    /// satisfied (`swarm-core`'s own `attempt_apply`, `SPEC.md` §4.3),
     /// so an entry an observer holds but which this replay cannot reach is
     /// direct, self-contained evidence that the bundle does not reflect an
-    /// honest export — I2's witness (§20.5).
+    /// honest export — I2's witness (§6.2).
     pub leftover: Vec<(NodeId, Entry)>,
     /// The version vector at the fixed point — everything in `applied`,
     /// nothing else. Callers use this with [`first_missing_dep`] to name
@@ -40,10 +40,10 @@ pub struct Replay {
 /// next entry — in each chain's fixed position order — has its `deps`
 /// satisfied by what has been applied so far, until one full pass makes no
 /// further progress. The same fixed-point shape as `swarm-core`'s own
-/// `drain_buffer` (`docs/spec.md` §9.3), reimplemented here rather than
+/// `drain_buffer` (`SPEC.md` §4.3), reimplemented here rather than
 /// called.
 ///
-/// Callers pass only chains that already survived `verify_chain` (§8.3):
+/// Callers pass only chains that already survived `verify_chain` (§4.2):
 /// that guarantees each chain's own `seq` is contiguous from zero, so
 /// within-chain order is already settled and only cross-author `deps` are
 /// left to resolve here.

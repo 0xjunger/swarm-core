@@ -1,13 +1,13 @@
 //! M0 acceptance tests.
 //!
-//! The milestone's stated criterion (`DESIGN.md` §M0) is only the first two tests
-//! here: same seed produces an identical trace, different seeds produce different
-//! ones. The rest exist because those two are satisfiable by a completely broken
-//! simulator — one that drops every message, or never delivers anything, is
-//! perfectly deterministic.
+//! The milestone's stated criterion is only the first two tests here: same seed
+//! produces an identical trace, different seeds produce different ones. The rest
+//! exist because those two are satisfiable by a completely broken simulator — one
+//! that drops every message, or never delivers anything, is perfectly
+//! deterministic.
 //!
-//! `DESIGN.md` §M6 insists that a passing test must be shown to catch something.
-//! That principle is worth applying at M0 rather than waiting for M6, so the tests
+//! M6 insists that a passing test must be shown to catch something. That
+//! principle is worth applying at M0 rather than waiting for M6, so the tests
 //! below are split into two groups: the criterion, and the guards that stop the
 //! criterion from being met vacuously.
 
@@ -153,7 +153,7 @@ fn partition_blocks_delivery_across_groups() {
 
 #[test]
 fn bounded_queue_drops_oldest_under_pressure() {
-    // Guards the memory bound DESIGN.md §7 requires. Tiny cap, heavy traffic.
+    // Guards the memory bound DESIGN.md D-013 requires. Tiny cap, heavy traffic.
     let trace = run(&SimConfig {
         loss_permille: 0,
         queue_cap: 2,
@@ -237,7 +237,7 @@ fn trace_observes_the_model_not_just_the_seed() {
 #[test]
 #[should_panic(expected = "delay_min must be >= 1")]
 fn zero_delay_is_rejected() {
-    // Rule R1 (docs/spec.md §6): a zero delay would allow send -> receive -> send
+    // Rule R1: a zero delay would allow send -> receive -> send
     // cascades inside one tick, whose order no stated rule determines.
     run(&SimConfig {
         delay_min: 0,

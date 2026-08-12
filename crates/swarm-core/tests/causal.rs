@@ -1,11 +1,11 @@
-//! Causal delivery and anti-entropy mechanics (`docs/spec.md` §9.3-9.5).
+//! Causal delivery and anti-entropy mechanics (`SPEC.md` §4.3).
 //!
 //! `src/lib.rs`'s own inline tests cover the basic shape of each mechanism
 //! (an unsatisfied entry buffers, a satisfied one applies, a duplicate is a
 //! no-op, an anti-entropy reply carries the gap). This file goes further:
 //! multi-entry, multi-origin scenarios that only make sense once several
 //! nodes and several `step` calls are in play — including invariant **I2**
-//! directly (`docs/spec.md` §13).
+//! directly (`SPEC.md` §6.2).
 
 use std::collections::BTreeMap;
 
@@ -100,7 +100,7 @@ fn a_same_origin_gap_fills_and_drains_to_a_fixed_point_in_one_step() {
 
     // seq 0 arrives: applying it satisfies seq 1's deps in the same `step`
     // call, so both entries are visible immediately — no second delivery
-    // needed (`docs/spec.md` §9.3, "drained to a fixed point").
+    // needed (`SPEC.md` §4.3, "drained to a fixed point").
     let after_fill = recv(&after_gap, w, w0.clone(), 11);
     assert_eq!(after_fill.causal_vv().highest(w), Some(1));
     assert_eq!(after_fill.entries(), vec![&w0, &w1]);
@@ -184,7 +184,7 @@ fn the_causal_buffer_evicts_the_oldest_entry_when_full() {
 
     // A third, at a later tick: the buffer is full, so the oldest —
     // smallest (inserted_at, origin, seq), i.e. W's, inserted at tick 1 —
-    // is evicted to make room (`docs/spec.md` §9.4).
+    // is evicted to make room (`DESIGN.md` D-013).
     observer = recv(&observer, y, unsatisfiable(y, &keys[2]), 3);
 
     let keys_held: Vec<(NodeId, u64)> = observer.buffer_keys().collect();
@@ -207,11 +207,11 @@ fn anti_entropy_reply_spans_every_behind_origin_ascending() {
     // Y receives both of W's entries, then authors its own via a real `Tick`
     // (entry_period fires every tick here) — this is the only path that
     // correctly appends to Y's own log and advances its own causal_vv
-    // component, exactly as `docs/spec.md` §9.2 specifies.
+    // component, exactly as `SPEC.md` §4.3 specifies.
     //
     // Y authors *two* entries in that one tick, and that is M3 working as
     // specified: `raw_entry` gives w0 the body `TaskClaim { task: 0 }`, Y's
-    // own first claim is also task 0 (`docs/spec.md` §10.6 numbers claims by
+    // own first claim is also task 0 (`SPEC.md` §6.3 numbers claims by
     // the author's own claim count), and W wins it — W's claim has lc 0
     // against Y's lc 2, and lower lc wins (§5). So Y claims, immediately
     // observes that it lost, and withdraws in the same tick.
@@ -247,7 +247,7 @@ fn anti_entropy_reply_spans_every_behind_origin_ascending() {
     // Ascending by origin (W=0 before Y=2), then by seq within an origin.
     // `(w, 0)` is re-sent even though X already claims to have it: the reply
     // overlaps by one with the peer's advertised head so that equivocation on
-    // that entry can be caught (`docs/spec.md` §11, M4) — a version vector
+    // that entry can be caught (`DESIGN.md` D-007) — a version vector
     // counts entries, it does not identify them. `(w, 1)` and both of Y's
     // entries are genuinely missing.
     assert_eq!(sent, [(w, 0), (w, 1), (y, 0), (y, 1)]);

@@ -113,10 +113,10 @@ const C: NodeId = NodeId(2);
 /// ```
 ///
 /// This is the visible form of the acceptance test in
-/// `tests/m2_convergence.rs`: `DESIGN.md` §9's M2 criterion — "3 node {A,B}
-/// ve {C} olarak bölünüyor, 100 tick çalışıyor, birleşiyor, 50 tick daha
-/// çalışıyor → üçü de aynı kayıt kümesine sahip" — demonstrated rather than
-/// asserted.
+/// `tests/m2_convergence.rs`: M2's acceptance criterion — three nodes split
+/// into {A,B} and {C}, run for 100 ticks, heal, run 50 more ticks, and all
+/// three converge on the same claim set (`SPEC.md` §6.3, I3) — demonstrated
+/// rather than asserted.
 fn converge(args: &[String]) {
     let seed = flag(args, "--seed").unwrap_or(42);
     let before = flag(args, "--before").unwrap_or(100);
@@ -151,7 +151,7 @@ fn converge(args: &[String]) {
         budget_per_node: 3,
     };
 
-    println!("\n{BLD}swarm-core{RST}  M2 — causal delivery + anti-entropy (docs/spec.md §9)");
+    println!("\n{BLD}swarm-core{RST}  M2 — causal delivery + anti-entropy (SPEC.md §4.3)");
     println!(
         "{DIM}seed {CYN}{seed}{RST}{DIM}  ·  {{n0 n1}} | {{n2}} for {before} ticks, heal, {after} more  ·  loss 10%{RST}"
     );
@@ -279,11 +279,11 @@ const ALL: [NodeId; 3] = [A, B, C];
 /// cargo run -q -p swarm-sim --example run -- claim --quiet   # tables only
 /// ```
 ///
-/// This is the visible form of `tests/m3_claim.rs`: `DESIGN.md` §9's M3
-/// criterion — "İki partisyon aynı görevi talep ediyor, birleşme sonrası her
-/// iki node da aynı kazananı hesaplıyor (kimse 'ben kazandım' sanmıyor). Ve
-/// kaybeden node'un log'unda geri çekilme kaydı var." — demonstrated rather
-/// than asserted.
+/// This is the visible form of `tests/m3_claim.rs`: M3's acceptance
+/// criterion — two partitions claim the same task; after healing, both nodes
+/// compute the same winner (neither believes it won), and the losing node's
+/// log carries a withdrawal record (`SPEC.md` §6.3, I3) — demonstrated
+/// rather than asserted.
 fn claim(args: &[String]) {
     let seed = flag(args, "--seed").unwrap_or(42);
     let before = flag(args, "--before").unwrap_or(100);
@@ -314,11 +314,11 @@ fn claim(args: &[String]) {
         budget_per_node: 3,
     };
 
-    println!("\n{BLD}swarm-core{RST}  M3 — task-claim CRDT (docs/spec.md §10)");
+    println!("\n{BLD}swarm-core{RST}  M3 — task-claim CRDT (SPEC.md §6.3)");
     println!(
         "{DIM}seed {CYN}{seed}{RST}{DIM}  ·  {{n0 n1}} | {{n2}} for {before} ticks, heal, {after} more  ·  loss 10%{RST}"
     );
-    println!("{DIM}winner rule: min by (priority, logical_clock, node_id) — DESIGN.md §4.2{RST}\n");
+    println!("{DIM}winner rule: min by (priority, logical_clock, node_id) — SPEC.md §6.3{RST}\n");
 
     let (trace, states) = run_with_states(&cfg);
 
@@ -327,7 +327,7 @@ fn claim(args: &[String]) {
         // carries it afterwards is `converge`'s subject, not this scenario's.
         // An authoring broadcast is the **first** time an entry's own author
         // sends it — every later send of the same `(origin, seq)` is an
-        // anti-entropy fill reply (`docs/spec.md` §9.5).
+        // anti-entropy fill reply.
         let mut seen: BTreeSet<(NodeId, u64)> = BTreeSet::new();
         for r in trace.records() {
             match r {

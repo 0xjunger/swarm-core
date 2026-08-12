@@ -1,4 +1,4 @@
-//! `LogBundle` round-trips and canonicity (`docs/spec.md` §20.2).
+//! `LogBundle` round-trips and canonicity (`SPEC.md` §4.4).
 
 use std::collections::BTreeMap;
 

@@ -1,11 +1,12 @@
-//! M5's acceptance test (`DESIGN.md` §9, "Bitti sayılır", verbatim):
+//! M5's acceptance test (`SPEC.md` §6.4, I4):
 //!
-//! "Rastgele partition/birleşme senaryolarında 1000 farklı seed koşuluyor,
-//! I4 hiç ihlal edilmiyor."
+//! 1000 different seeds are run across random partition/merge scenarios,
+//! and I4 is never violated.
 //!
-//! I4 = "tüm partisyonlardaki harcanabilir hakların toplamı ≤ yetkilendirilen
-//! toplam". This is: total unique Spend amounts across all entries ever
-//! created must not exceed the sum of all per-node budgets.
+//! I4: "the sum, across every node, of everything that node has recorded
+//! spending never exceeds the sum of what the `Spec` authorized for that
+//! node" (`SPEC.md` §6.4). This is: total unique Spend amounts across all
+//! entries ever created must not exceed the sum of all per-node budgets.
 //!
 //! The per-node cap makes I4 structural — no consensus, no handshake. But the
 //! test must count **unique** entries, because each Spend entry may be held by
@@ -138,8 +139,8 @@ fn i4_holds_under_partition_and_loss_across_seeds() {
 /// scenario as `swarm-verify/tests/i4_negative.rs`, kept here too because
 /// it is the M5 acceptance test's own negative control — proof that
 /// `i4_holds_under_loss_across_a_thousand_seeds` above is not vacuously
-/// green (docs/spec.md §15, §1). It must call the real checker, not
-/// just inspect the escrow counter by hand.
+/// green. It must call the real checker, not just inspect the escrow
+/// counter by hand.
 #[test]
 fn i4_check_catches_overspend_in_fabricated_entries() {
     use std::collections::BTreeMap;

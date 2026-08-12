@@ -1,7 +1,7 @@
 //! X2a: the process-boundary test. Runs the actual `swarm-verify` binary
 //! against the committed fixture files via `std::process::Command` — no
 //! simulator involved, so this exercises exactly what a stranger holding
-//! nothing but two files on disk would run (`docs/spec.md` §20.6).
+//! nothing but two files on disk would run.
 //!
 //! Asserts the exit-code contract: `0` every invariant `Satisfied` and no
 //! chain finding, `1` at least one `Violated` invariant or chain finding
@@ -31,7 +31,12 @@ fn run(args: &[&str]) -> Output {
 }
 
 fn run_fixture(name: &str) -> Output {
-    run(&["--bundle", &fixture_path(name, "bundle"), "--spec", &fixture_path(name, "spec")])
+    run(&[
+        "--bundle",
+        &fixture_path(name, "bundle"),
+        "--spec",
+        &fixture_path(name, "spec"),
+    ])
 }
 
 fn assert_exit(output: &Output, expected: i32) {

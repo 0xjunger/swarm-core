@@ -1,4 +1,4 @@
-//! `verify(bundle, spec) -> Verdict` (`docs/spec.md` §20.5): the standalone
+//! `verify(bundle, spec) -> Verdict` (`SPEC.md` §7.1): the standalone
 //! judge, and `swarm-verify`'s normative surface. No simulator, no live
 //! `State`, no access to the process that produced `bundle` — only the
 //! bytes in `bundle`, checked against the rules in `spec`. See
@@ -19,7 +19,7 @@ use crate::verdict::{ChainFinding, ChainProblem, InvariantResult, Verdict, Witne
 
 const STRUCTURAL_NOTE: &str = "I5/I6 are structural properties of swarm-core's source \
     (policy.rs), not something a log of signed entries can attest to either way — see \
-    docs/spec.md §15.";
+    SPEC.md §6.5-§6.6.";
 
 /// One bundle's chains that survived structural verification, keyed the
 /// same way `LogBundle::views` is: observer, then author.
@@ -32,8 +32,8 @@ struct ObserverState {
     claims: BTreeMap<TaskId, Vec<Claim>>,
 }
 
-/// Checks `bundle` against `spec` and returns a [`Verdict`] (`docs/spec.md`
-/// §20.5). Never reads anything but its two arguments.
+/// Checks `bundle` against `spec` and returns a [`Verdict`] (`SPEC.md`
+/// §7.1). Never reads anything but its two arguments.
 pub fn verify(bundle: &LogBundle, spec: &Spec) -> Verdict {
     let (chains_ok, chain_findings) = verify_chains(bundle, spec);
 
@@ -54,7 +54,7 @@ pub fn verify(bundle: &LogBundle, spec: &Spec) -> Verdict {
 }
 
 /// Step 1: for each `(observer, author)` chain — the misfiling check, then
-/// `verify_chain` (§8.3), then `spec.log_cap`. Chains that pass are carried
+/// `verify_chain` (§4.2), then `spec.log_cap`. Chains that pass are carried
 /// forward; chains that fail any of the three are reported directly in
 /// `Verdict::chains` and excluded from every further check — malformed
 /// evidence is not evidence for or against an invariant.
@@ -121,7 +121,7 @@ fn verify_chains(bundle: &LogBundle, spec: &Spec) -> (VerifiedChains, Vec<ChainF
 
 /// Step 2: replay one observer's chain-verified chains to a fixed point and
 /// fold `TaskClaim`s into `swarm-verify`'s own claim map — never
-/// `swarm_core::state::Claims` (`docs/spec.md` §20.5).
+/// `swarm_core::state::Claims` (`SPEC.md` §7.2).
 fn replay_observer(chains: &BTreeMap<NodeId, Vec<Entry>>) -> ObserverState {
     let replay = causal_replay(chains);
     let mut claims: BTreeMap<TaskId, Vec<Claim>> = BTreeMap::new();
@@ -139,7 +139,7 @@ fn replay_observer(chains: &BTreeMap<NodeId, Vec<Entry>>) -> ObserverState {
 }
 
 /// The winner of `task` under `swarm-verify`'s own claim map: `min` by
-/// `Claim`'s derived `Ord`, exactly `DESIGN.md` §4.2's rule — restated here,
+/// `Claim`'s derived `Ord`, exactly `SPEC.md` §6.3's rule — restated here,
 /// not called from `swarm_core::state::Claims::winner`.
 fn winner(claims: &BTreeMap<TaskId, Vec<Claim>>, task: TaskId) -> Option<Claim> {
     claims.get(&task).and_then(|v| v.iter().min().copied())
@@ -164,13 +164,19 @@ fn check_i1(chains_ok: &VerifiedChains, roster: &Roster) -> InvariantResult {
         #[cfg(not(feature = "mutant-verify-i1"))]
         for entries in chains.values() {
             for entry in entries {
-                by_key.entry((entry.node, entry.seq)).or_default().push(entry.clone());
+                by_key
+                    .entry((entry.node, entry.seq))
+                    .or_default()
+                    .push(entry.clone());
             }
         }
         #[cfg(feature = "mutant-verify-i1")]
         for (&author, entries) in chains {
             for entry in entries {
-                by_key.entry((author, entry.seq)).or_default().push(entry.clone());
+                by_key
+                    .entry((author, entry.seq))
+                    .or_default()
+                    .push(entry.clone());
             }
         }
     }
@@ -247,7 +253,8 @@ fn check_i3(per_observer: &BTreeMap<NodeId, ObserverState>) -> InvariantResult {
 
             let sa = &per_observer[&a];
             let sb = &per_observer[&b];
-            let tasks: BTreeSet<TaskId> = sa.claims.keys().chain(sb.claims.keys()).copied().collect();
+            let tasks: BTreeSet<TaskId> =
+                sa.claims.keys().chain(sb.claims.keys()).copied().collect();
             for task in tasks {
                 let winner_a = winner(&sa.claims, task);
                 let winner_b = winner(&sb.claims, task);
@@ -292,7 +299,10 @@ fn check_i4(
             if let Body::Spend { amount } = entry.body {
                 if seen.insert((entry.node, entry.seq)) {
                     *spent.entry(entry.node).or_insert(0) += amount;
-                    spend_entries.entry(entry.node).or_default().push(entry.clone());
+                    spend_entries
+                        .entry(entry.node)
+                        .or_default()
+                        .push(entry.clone());
                 }
             }
         }
@@ -349,7 +359,7 @@ mod tests {
     /// can no longer produce, but a property `check_i1` should hold on its
     /// own regardless. `mutant-verify-i1` breaks exactly that property; this
     /// is the only test able to observe the difference, since the full
-    /// pipeline masks it (`docs/spec.md` §20.5).
+    /// pipeline masks it (`SPEC.md` §7.2).
     #[test]
     fn check_i1_groups_by_the_signer_not_by_the_map_key() {
         let (kg, kf) = (key(1), key(2));

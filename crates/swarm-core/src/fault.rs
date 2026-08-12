@@ -1,10 +1,12 @@
-//! Equivocation detection (`DESIGN.md` §4.4): the proof is the two signatures.
+//! Equivocation detection (`DESIGN.md` D-007): the proof is the two signatures.
 //!
 //! A [`Poe`] (proof of equivocation) needs nothing beyond itself and the
-//! roster to verify. That is the whole point (`DESIGN.md` §4.4): "kanıt
-//! kendi kendini doğruladığı için suçlu node'u dışlamak konsensüs
-//! gerektirmez" — no consensus, no context, no witness other than the two
-//! signatures being checked against the roster key of the node they accuse.
+//! roster to verify. That is the whole point (`DESIGN.md` D-007): "a third
+//! party holding only the roster's public keys, who never ran the mission
+//! and never exchanged anything with whoever raised the accusation, reaches
+//! the identical verdict from the two signatures alone" — no consensus, no
+//! context, no witness other than the two signatures being checked against
+//! the roster key of the node they accuse.
 
 use crate::wire::{Entry, Roster};
 
@@ -22,7 +24,7 @@ pub struct Poe {
 impl Poe {
     /// Builds a proof from two entries, or `None` if they do not actually
     /// conflict: same author, same `seq`, different bytes. Two deliveries of
-    /// the identical entry are not equivocation (`docs/spec.md` §9.3) — that
+    /// the identical entry are not equivocation (`SPEC.md` §6.1) — that
     /// is honest re-delivery, not a proof of anything.
     pub fn new(x: Entry, y: Entry) -> Option<Self> {
         if x.node != y.node || x.seq != y.seq {
@@ -72,7 +74,7 @@ pub enum PoeError {
 }
 
 /// Verifies a [`Poe`] against `roster` alone — no log, no peer, no context
-/// beyond the roster's public keys (`DESIGN.md` §4.4). Any third node holding
+/// beyond the roster's public keys (`DESIGN.md` D-007). Any third node holding
 /// the same roster reaches the same verdict unilaterally.
 pub fn verify_poe(roster: &Roster, poe: &Poe) -> Result<(), PoeError> {
     if poe.a.node != poe.b.node {

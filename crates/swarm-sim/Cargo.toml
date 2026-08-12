@@ -5,16 +5,19 @@ description = "Deterministic network simulator for swarm-core. No sockets, no th
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+repository.workspace = true
+keywords = ["simulation", "distributed-systems", "testing"]
+categories = ["simulation", "development-tools::testing"]
 
 [dependencies]
 swarm-core.workspace = true
 # ChaCha8Rng rather than rand::StdRng: StdRng's docs disclaim value stability
 # across releases, so a routine `cargo update` could silently change what seed 42
-# produces. See docs/spec.md §8.
+# produces.
 rand_chacha = "0.3"
 rand_core = "0.6"
 blake3 = "1"
-# M2: the simulator signs on behalf of each simulated node. See docs/spec.md §15.
+# M2: the simulator signs on behalf of each simulated node.
 ed25519-dalek = { workspace = true, features = ["alloc"] }
 
 [dev-dependencies]

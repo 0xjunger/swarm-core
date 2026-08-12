@@ -1,4 +1,4 @@
-//! M2's acceptance test (`DESIGN.md` §9, "Bitti sayılır", verbatim):
+//! M2's acceptance criterion (`SPEC.md` §6.3, I3):
 //!
 //! 3 nodes `{A,B}` and `{C}` are partitioned, run 100 ticks, merge, run 50
 //! more ticks — all three end up with **the same entry set**.
@@ -32,7 +32,8 @@ fn cfg(seed: u64, loss_permille: u32) -> SimConfig {
         // quiet ticks. `anti_entropy_period: 5` fits six anti-entropy rounds
         // into those 30 ticks, and each round independently re-offers
         // whatever a peer is still missing — which is exactly the mechanism
-        // `DESIGN.md` §4.1 promises ("kayıp mesajları er ya da geç yakalar").
+        // `DESIGN.md` D-004 promises: read what the peer claims to have,
+        // compute what is missing, and send or request exactly that.
         // Measured over 60 seeds: six rounds converge every time at 20% loss
         // and all but a handful at 40%, where one round (the earlier
         // `anti_entropy_period: 15`) failed 14 seeds in 60. M3 raised the
@@ -92,9 +93,9 @@ fn partition_heal_converges_to_the_same_entry_set() {
 
 #[test]
 fn partition_heal_converges_even_with_message_loss() {
-    // Anti-entropy's whole point (`DESIGN.md` §4.1: "kayıp mesajları er ya
-    // da geç yakalar") — convergence must hold under real loss, not only
-    // the loss-free happy path.
+    // Anti-entropy's whole point (`DESIGN.md` D-004: read what the peer
+    // claims to have, compute what is missing, close the gap) — convergence
+    // must hold under real loss, not only the loss-free happy path.
     //
     // Swept over seeds rather than pinned to one: a single seed proves that
     // *a* lossy run converged, which is a much weaker claim than the one

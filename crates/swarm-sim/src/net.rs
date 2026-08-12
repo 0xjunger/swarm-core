@@ -1,8 +1,8 @@
 //! The channel: delay, loss, and a bounded queue per destination.
 //!
-//! See `docs/spec.md` §5. Partition handling deliberately lives elsewhere — the
-//! queue does not know about reachability, because reachability is evaluated at
-//! delivery time, not at enqueue time (§5.4).
+//! Partition handling deliberately lives elsewhere — the queue does not know
+//! about reachability, because reachability is evaluated at delivery time,
+//! not at enqueue time.
 
 use std::collections::BTreeMap;
 use swarm_core::{Envelope, NodeId};
@@ -27,7 +27,7 @@ pub struct Enqueued {
 pub struct Network {
     /// Keyed `(due_tick, enqueue_seq)`. Because `enqueue_seq` is globally unique,
     /// no two messages ever compare equal, so this order is *total* and needs no
-    /// tie-break rule. That matters: `DESIGN.md` §7 warns that tie-breaks reached
+    /// tie-break rule. That matters: `DESIGN.md` D-002 warns that tie-breaks reached
     /// for casually are where wall-clock dependencies sneak in.
     queues: BTreeMap<NodeId, BTreeMap<(u64, u64), Msg>>,
     cap: usize,
@@ -48,7 +48,7 @@ impl Network {
     ///
     /// If the destination queue is full, the message that would have been
     /// delivered next is dropped to make room — "drop the oldest", per
-    /// `DESIGN.md` §4.1 and §7. Every queue in this system is bounded; the
+    /// `DESIGN.md` D-013. Every queue in this system is bounded; the
     /// discipline starts here so it is already habitual when the causal buffer
     /// arrives at M2.
     pub fn enqueue(&mut self, due: u64, msg: Msg) -> Enqueued {

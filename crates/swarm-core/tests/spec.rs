@@ -1,9 +1,9 @@
-//! `Spec` round-trips and canonicity (`docs/spec.md` §20.3).
+//! `Spec` round-trips and canonicity (`SPEC.md` §4.5).
 //!
 //! The independence proof — the same bundle verifies clean against its real
 //! `Spec` and reports an I4 violation against one with a lowered budget —
 //! needs `swarm-verify::verify`, which this crate does not depend on; that
-//! test lives in `swarm-verify`'s own suite (`docs/spec.md` §20.5), not here.
+//! test lives in `swarm-verify`'s own suite (`SPEC.md` §7.2), not here.
 
 use std::collections::BTreeMap;
 

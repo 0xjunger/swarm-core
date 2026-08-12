@@ -1,31 +1,31 @@
-//! Derived replicated state (`DESIGN.md` §5's `state/`): the task-claim CRDT.
+//! Derived replicated state (`DESIGN.md` D-002's `state/`): the task-claim CRDT.
 //!
-//! `DESIGN.md` §4.2 names three data types and three difficulty levels. M3
+//! `DESIGN.md` D-005 names three data types and three difficulty levels. M3
 //! implements the third — task claims, `Map<TaskId, ORSet<Claim>>` with the
 //! deterministic winner `min by (priority, logical_clock, node_id)`. The LWW
 //! telemetry register and the sensor-track OR-set are not in M3's milestone
-//! text and are not written here (`docs/spec.md` §14).
+//! text and are not written here.
 //!
 //! Everything in this module is a fold over entries. Nothing here reads a
 //! clock, draws a random number, or depends on arrival order — which is what
-//! makes invariant I3 structural rather than argued (`docs/spec.md` §13).
+//! makes invariant I3 structural rather than argued (`SPEC.md` §6.3).
 
 use alloc::collections::{BTreeMap, BTreeSet};
 
 use crate::wire::{Body, VerifiedEntry};
 use crate::NodeId;
 
-/// A task's identity. Deliberately abstract for the whole of Phase 1
-/// (`DESIGN.md` §9: "Görev = soyut bir `TaskId`").
+/// A task's identity. Deliberately abstract for the whole of Phase 1 —
+/// nothing assigns real tasks from outside.
 pub type TaskId = u64;
 
 /// One node's bid for one task.
 ///
 /// **The field order is the winner rule.** `Ord` is derived, so
-/// `(priority, lc, node, seq)` compares in exactly the order `DESIGN.md` §4.2
+/// `(priority, lc, node, seq)` compares in exactly the order `SPEC.md` §6.3
 /// specifies — `min by (priority, logical_clock, node_id)` — with `seq`
 /// appended so the ordering is total by construction rather than by
-/// assumption (`docs/spec.md` §10.5). Deriving it means there is no second
+/// assumption (`SPEC.md` §6.3). Deriving it means there is no second
 /// place where the comparison could drift away from the spec.
 ///
 /// `(node, seq)` is also the OR-set tag: it is the identity of the entry that
@@ -33,14 +33,14 @@ pub type TaskId = u64;
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Claim {
     /// Lower is better. Fixed at 1 for autonomously authored claims
-    /// (`docs/spec.md` §10.6); real priorities arrive with a real mission.
+    /// (`SPEC.md` §6.3); real priorities arrive with a real mission.
     pub priority: u8,
     /// The derived logical clock: how many entries the author had applied
-    /// when it wrote this claim (`docs/spec.md` §10.2). Lower means causally
+    /// when it wrote this claim (`SPEC.md` §6.3). Lower means causally
     /// earlier.
     pub lc: u64,
-    /// The author. The last term of `DESIGN.md` §4.2's rule, and never a wall
-    /// clock — §7 forbids that because GPS time can be spoofed.
+    /// The author. The last term of `SPEC.md` §6.3's rule, and never a wall
+    /// clock — `DESIGN.md` D-002 forbids that because GPS time can be spoofed.
     pub node: NodeId,
     /// The author's log index for this claim. Totality tie-break only.
     pub seq: u64,
@@ -48,16 +48,16 @@ pub struct Claim {
 
 /// Every task claim and withdrawal this node has observed.
 ///
-/// `Map<TaskId, ORSet<Claim>>` per `DESIGN.md` §4.2. A `BTreeSet<Claim>` *is*
+/// `Map<TaskId, ORSet<Claim>>` per `SPEC.md` §6.3. A `BTreeSet<Claim>` *is*
 /// the OR-set here: `Claim` carries its own unique `(node, seq)` tag, so two
 /// nodes bidding identically produce two elements rather than one. `remove` is
-/// not implemented — see [`Claims::observe`] and `docs/spec.md` §10.4.
+/// not implemented — see [`Claims::observe`] and `SPEC.md` §6.3.
 #[derive(Clone, Debug, Default)]
 pub struct Claims {
     by_task: BTreeMap<TaskId, BTreeSet<Claim>>,
     withdrawn: BTreeSet<(TaskId, NodeId)>,
     /// The observing node's own id. Only read by [`Claims::winner`] under
-    /// the `mutant-i3` feature (docs/spec.md §15, §1) to simulate a
+    /// the `mutant-i3` feature (`SPEC.md` §6.3) to simulate a
     /// self-preferring tie-break bug; otherwise unused, since the real
     /// winner rule is `Claim`'s `Ord` alone and has no notion of "self".
     #[cfg(feature = "mutant-i3")]
@@ -81,7 +81,7 @@ impl Claims {
     }
 
     /// Records which node owns this `Claims`, for [`Claims::winner`]'s
-    /// `mutant-i3` tie-break (docs/spec.md §15, §1). Does not exist
+    /// `mutant-i3` tie-break (`SPEC.md` §6.3). Does not exist
     /// outside that feature.
     #[cfg(feature = "mutant-i3")]
     pub(crate) fn set_owner(&mut self, me: NodeId) {
@@ -92,17 +92,16 @@ impl Claims {
     ///
     /// Takes a [`VerifiedEntry`], never a raw `Entry`: unverified bytes must
     /// not reach state, and making that a signature rather than a convention
-    /// turns "forgot to verify" into a compile error (`DESIGN.md`, "Entry ile
-    /// nasıl çalışmalı", item 4).
+    /// turns "forgot to verify" into a compile error (`SPEC.md` §4.2).
     ///
     /// Both arms are set insertions, so folding is idempotent and
     /// commutative — the same entry set yields the same `Claims` whatever
     /// order it arrives in. That is invariant I3 discharged structurally
-    /// (`docs/spec.md` §13).
+    /// (`SPEC.md` §6.3).
     ///
     /// Note what `Withdraw` does **not** do: it does not remove the author's
     /// claim. The claim set is grow-only, so the winner is a pure `min` over
-    /// it and "losing is monotone" holds (`docs/spec.md` §10.4-10.5).
+    /// it and "losing is monotone" holds (`SPEC.md` §6.3).
     pub fn observe(&mut self, entry: &VerifiedEntry) {
         let e = entry.entry();
         match e.body {
@@ -128,7 +127,7 @@ impl Claims {
     /// restated wrongly.
     pub fn winner(&self, task: TaskId) -> Option<Claim> {
         let set = self.by_task.get(&task)?;
-        // I3 negative control (docs/spec.md §15, §1): a self-preferring
+        // I3 negative control (`SPEC.md` §6.3): a self-preferring
         // tie-break. Two nodes holding the *same* entry set now derive
         // *different* winners whenever both claimed the task — genuine,
         // node-dependent divergence, not a hand-built fake. Never built into
@@ -161,13 +160,13 @@ impl Claims {
     }
 
     /// Whether `node` has claimed `task` — the precondition for owing a
-    /// withdrawal (`docs/spec.md` §10.6).
+    /// withdrawal (`SPEC.md` §6.3).
     pub fn has_claimed(&self, task: TaskId, node: NodeId) -> bool {
         self.claims(task).any(|c| c.node == node)
     }
 }
 
-/// The escrow counter (`DESIGN.md` §M5): per-node spending capped by a fixed
+/// The escrow counter (`SPEC.md` §6.4): per-node spending capped by a fixed
 /// mission-start allocation.
 ///
 /// A node's budget is immutable once set. Spending is cumulative — each
@@ -178,7 +177,7 @@ impl Claims {
 /// handshake.
 ///
 /// Budget transfers (which *would* require a handshake) are not in M5's scope
-/// (`docs/spec.md` §13).
+/// (`DESIGN.md` D-005).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Escrow {
     allocations: BTreeMap<NodeId, u64>,

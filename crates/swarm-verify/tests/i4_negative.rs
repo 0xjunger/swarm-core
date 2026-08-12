@@ -55,7 +55,10 @@ fn a_flagrant_overspend_is_reported() {
         prev = e.chain_hash();
         let (next, _) = step(
             &s,
-            Event::Recv { from: a, payload: Envelope::Entry(e) },
+            Event::Recv {
+                from: a,
+                payload: Envelope::Entry(e),
+            },
             LogicalTime(seq + 1),
         );
         s = next;

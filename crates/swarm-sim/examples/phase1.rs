@@ -1,4 +1,4 @@
-//! The Phase 1 exit demo (`DESIGN.md` §9 criterion #2, `docs/spec.md` §1):
+//! The Phase 1 exit demo (`DESIGN.md` D-009):
 //! one scripted, non-interactive run that tells the whole story —
 //! partition, continued work on both sides, a contested claim, healing,
 //! convergence, an equivocator caught without consensus, and the invariant
@@ -12,7 +12,7 @@
 //! byte-identical to the pre-M7 version of this example — the flags below
 //! are additive.
 //!
-//! `docs/spec.md` §20.6's two-command exit scenario:
+//! `DESIGN.md` D-009's two-command exit scenario:
 //!
 //!   cargo run -p swarm-sim --example phase1 -- --equivocation \
 //!       --export-bundle /tmp/run.bundle --export-spec /tmp/mission.spec
@@ -94,7 +94,7 @@ fn parse_demo_args() -> DemoArgs {
 }
 
 /// Merges every state's own `export_bundle()` into one file-ready
-/// `LogBundle` — the same construction `docs/spec.md` §20.2 describes for
+/// `LogBundle` — the same construction `SPEC.md` §4.4 describes for
 /// assembling a whole run out of individual per-node exports.
 fn export_bundle_for(states: &BTreeMap<NodeId, State>) -> LogBundle {
     let mut exports = states.values().map(State::export_bundle);
@@ -172,7 +172,10 @@ fn main() {
                 Body::Spend { amount } => format!("spends {amount}"),
             };
             let group = if side == 0 { "{n0 n1}" } else { "{n2 n3 n4}" };
-            println!("  t={at:>3}  {GRN}n{}{RST} {DIM}{group}{RST}  {label}", from.0);
+            println!(
+                "  t={at:>3}  {GRN}n{}{RST} {DIM}{group}{RST}  {label}",
+                from.0
+            );
         }
     }
 
@@ -199,18 +202,31 @@ fn main() {
     println!("{BLD}  node   entries   winner(task 0)   withdrew task 0{RST}");
     for &n in &HONEST {
         let s = &states[&n];
-        let w = s.claims().winner(0).map_or("-".into(), |w| format!("n{}", w.node.0));
+        let w = s
+            .claims()
+            .winner(0)
+            .map_or("-".into(), |w| format!("n{}", w.node.0));
         let withdrew = own_bodies(n, &states).contains(&Body::Withdraw { task: 0 });
         println!(
             "  n{}     {:>7}   {GRN}{w:<14}{RST}  {}",
             n.0,
             s.entries().len(),
-            if withdrew { format!("{YEL}yes{RST}") } else { "-".to_string() }
+            if withdrew {
+                format!("{YEL}yes{RST}")
+            } else {
+                "-".to_string()
+            }
         );
     }
     let entry_sets: Vec<BTreeSet<(NodeId, u64)>> = HONEST
         .iter()
-        .map(|n| states[n].entries().iter().map(|e| (e.node, e.seq)).collect())
+        .map(|n| {
+            states[n]
+                .entries()
+                .iter()
+                .map(|e| (e.node, e.seq))
+                .collect()
+        })
         .collect();
     let converged = entry_sets.windows(2).all(|w| w[0] == w[1]);
     let agree = HONEST
@@ -294,7 +310,10 @@ fn main() {
         }
     }
 
-    section(6, "The verdict — reproducible by a stranger holding only two files");
+    section(
+        6,
+        "The verdict — reproducible by a stranger holding only two files",
+    );
     println!(
         "{DIM}the same construction §20.6's two-command scenario uses: bundle assembled from each node's own export_bundle(), checked by swarm-verify::verify — no simulator, no live State{RST}\n"
     );
@@ -328,8 +347,7 @@ fn main() {
     }
     println!();
 
-    if let (Some(bundle_path), Some(spec_path)) =
-        (&demo_args.export_bundle, &demo_args.export_spec)
+    if let (Some(bundle_path), Some(spec_path)) = (&demo_args.export_bundle, &demo_args.export_spec)
     {
         let (bundle, roster_ids, budgets, log_cap) = if demo_args.equivocation {
             (
@@ -339,7 +357,12 @@ fn main() {
                 eq_cfg.log_cap as u32,
             )
         } else {
-            (honest_bundle, HONEST.to_vec(), cfg.budgets(), cfg.log_cap as u32)
+            (
+                honest_bundle,
+                HONEST.to_vec(),
+                cfg.budgets(),
+                cfg.log_cap as u32,
+            )
         };
 
         let spec = Spec {
@@ -357,7 +380,11 @@ fn main() {
 
         println!(
             "{DIM}exported {} scenario{RST}  bundle -> {bundle_path}  spec -> {spec_path}",
-            if demo_args.equivocation { "the equivocation" } else { "the honest" }
+            if demo_args.equivocation {
+                "the equivocation"
+            } else {
+                "the honest"
+            }
         );
     }
 }

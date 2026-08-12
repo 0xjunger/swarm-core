@@ -9,7 +9,7 @@
 //! presentation only (ANSI color codes, an arg parser, a couple of one-line
 //! renderers); it contains no protocol logic and nothing here is on the path
 //! `swarm_core::step` runs through, so it does not weaken the sans-I/O
-//! argument the original rule was protecting. See `docs/spec.md` §3.
+//! argument the original rule was protecting. See `DESIGN.md` D-002.
 
 use swarm_core::wire::Body;
 use swarm_core::Envelope;

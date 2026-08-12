@@ -1,0 +1,8 @@
+bundle: missing_node.bundle
+spec: missing_node.spec
+chains: none
+I1: Satisfied
+I2: Satisfied
+I3: Undetermined — fewer than two observers to compare
+I4: Satisfied
+exit code (swarm-verify CLI): 0 — Undetermined alone is not a violation

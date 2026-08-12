@@ -6,6 +6,9 @@ members = ["crates/swarm-core", "crates/swarm-sim", "crates/swarm-verify"]
 edition = "2021"
 license = "Apache-2.0"
 rust-version = "1.94"
+# Placeholder — no git remote is configured for this repository yet.
+# Fill in the real URL before publishing (see _work/HUMAN-DECISIONS.md).
+repository = "<REPOSITORY_URL>"
 
 [workspace.dependencies]
 swarm-core = { path = "crates/swarm-core" }

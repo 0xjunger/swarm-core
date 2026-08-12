@@ -1,0 +1,8 @@
+bundle: clean.bundle
+spec: clean.spec
+chains: none
+I1: Satisfied
+I2: Satisfied
+I3: Satisfied
+I4: Satisfied
+exit code (swarm-verify CLI): 0

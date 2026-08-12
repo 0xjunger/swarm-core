@@ -1,0 +1,8 @@
+bundle: broken_chain.bundle
+spec: broken_chain.spec
+chains: one ChainFinding — observer 0, author 0, a tampered signature (BadSignature at index 0)
+I1: Undetermined — no chain-verified entries in the bundle
+I2: Satisfied
+I3: Undetermined — fewer than two observers to compare
+I4: Satisfied
+exit code (swarm-verify CLI): 1 — a non-empty chains list alone is exit 1, independent of I1-I4

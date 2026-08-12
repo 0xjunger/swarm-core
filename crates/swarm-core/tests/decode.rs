@@ -1,5 +1,5 @@
 //! `decode_entry` is the exact inverse of `Entry::encoded()`
-//! (`docs/spec.md` §20.1): `decode(encode(x)) == x` for every `Entry`, or
+//! (`SPEC.md` §5.4): `decode(encode(x)) == x` for every `Entry`, or
 //! the format is lossy and nothing built on top of it can be trusted.
 
 use ed25519_dalek::SigningKey;
@@ -23,8 +23,7 @@ fn key() -> SigningKey {
 
 fn body_strategy() -> impl Strategy<Value = Body> {
     prop_oneof![
-        (any::<u64>(), any::<u8>())
-            .prop_map(|(task, priority)| Body::TaskClaim { task, priority }),
+        (any::<u64>(), any::<u8>()).prop_map(|(task, priority)| Body::TaskClaim { task, priority }),
         any::<u64>().prop_map(|task| Body::Withdraw { task }),
         any::<u64>().prop_map(|amount| Body::Spend { amount }),
     ]
@@ -32,7 +31,7 @@ fn body_strategy() -> impl Strategy<Value = Body> {
 
 /// A `BTreeMap<u8, u64>` decays into a `VersionVector` with strictly
 /// ascending, unique `NodeId`s for free — the same canonicity the decoder
-/// requires (`docs/spec.md` §20.1) — because the map already dedups and
+/// requires (`SPEC.md` §5.1) — because the map already dedups and
 /// orders its keys.
 fn deps_strategy() -> impl Strategy<Value = VersionVector> {
     prop::collection::btree_map(any::<u8>(), any::<u64>(), 0..6).prop_map(|m| {

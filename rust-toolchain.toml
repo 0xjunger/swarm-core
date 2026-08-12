@@ -1,5 +1,5 @@
 # Pinned deliberately: reproducibility is the point of this project, and it starts
-# with the compiler. See docs/spec.md §2.
+# with the compiler. See CONTRIBUTING.md.
 [toolchain]
 channel = "1.94.1"
 components = ["rustfmt", "clippy"]

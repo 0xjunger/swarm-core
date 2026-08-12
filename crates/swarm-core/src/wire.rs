@@ -1,6 +1,6 @@
 //! The wire format: `Entry`, canonical encoding, domain-separated signing.
 //!
-//! `DESIGN.md` §3 makes the critical decision: **the published message, the
+//! `DESIGN.md` D-008 makes the critical decision: **the published message, the
 //! log record, and the proof object are the same struct.** One signature over
 //! one canonical encoding serves all three roles, so the format is written by
 //! hand and pinned by the golden vector — never left to a serializer.
@@ -12,14 +12,14 @@ use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use crate::causal::VersionVector;
 use crate::NodeId;
 
-/// Domain separation tag (`DESIGN.md` §7, `docs/spec.md` §8.2).
+/// Domain separation tag (`DESIGN.md` D-008, `SPEC.md` §5.2).
 ///
 /// A signature is only valid under the context it was created for. Prefixing
 /// the signed bytes with this tag means an entry signature can never be
 /// replayed as a future certificate signature, or vice versa.
 pub const DOMAIN_TAG: &[u8] = b"SWARM_ENTRY_V1";
 
-/// Phase 1 fixed values (`DESIGN.md`, item 1: open the fields now, fill them
+/// Phase 1 fixed values (`DESIGN.md` D-008: open the fields now, fill them
 /// later). `mission_id` will become the roster Merkle root and `epoch` the
 /// roster version; at M1 both are constants, but they are already encoded and
 /// already checked, so introducing real values later changes no format.
@@ -31,7 +31,7 @@ pub const PHASE1_EPOCH: u32 = 0;
 pub struct Hash(pub [u8; 32]);
 
 impl Hash {
-    /// The link of an entry with no predecessor (`docs/spec.md` §8.3).
+    /// The link of an entry with no predecessor (`SPEC.md` §4.2).
     pub const ZERO: Hash = Hash([0u8; 32]);
 
     pub fn new(bytes: &[u8]) -> Self {
@@ -41,28 +41,29 @@ impl Hash {
 
 /// What an entry means.
 ///
-/// One variant at M1, two at M3, three at M5 (`DESIGN.md`, item 3): new
-/// variants arrive only when a test demands them (`DESIGN.md` §11.4), and
+/// One variant at M1, two at M3, three at M5 (`DESIGN.md` D-008): new
+/// variants arrive only when a test demands them, and
 /// each arrives with a test — the golden vector covers all three.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Body {
     /// "I claim task `task` with priority `priority`." M3's deterministic
     /// winner rule is `min by (priority, logical_clock, node_id)`
-    /// (`DESIGN.md` §4.2); `priority` is encoded from day one so that rule
+    /// (`SPEC.md` §6.3); `priority` is encoded from day one so that rule
     /// needs no format change, and `logical_clock` is derived from `deps`
-    /// rather than carried, so it needs none either (`docs/spec.md` §10.2).
+    /// rather than carried, so it needs none either (`SPEC.md` §6.3).
     TaskClaim { task: u64, priority: u8 },
     /// "I claimed `task`, I am not the winner, I am standing down."
     ///
     /// A record, not a CRDT operation: it does **not** remove the author's
-    /// claim from the claim set (`docs/spec.md` §10.4). This is the
-    /// "geri çekilme kaydı" M3's acceptance criterion asks for.
+    /// claim from the claim set (`SPEC.md` §6.3). This is the withdrawal
+    /// `DESIGN.md` D-005 describes as "recorded as a log fact instead,
+    /// without removing anything from the underlying claim set."
     Withdraw { task: u64 },
     /// "I am spending `amount` from my escrow allocation." M5's escrow
     /// counter: a node's total spending must never exceed the budget it was
     /// allocated at mission start. The per-node cap means the global
     /// invariant I4 — "sum of spend across all partitions ≤ authorised
-    /// total" — holds structurally, without consensus (`docs/spec.md` §13).
+    /// total" — holds structurally, without consensus (`SPEC.md` §6.4).
     Spend { amount: u64 },
 }
 
@@ -107,7 +108,7 @@ pub struct UnsignedEntry {
 }
 
 impl UnsignedEntry {
-    /// The bytes that get signed (`docs/spec.md` §8.2).
+    /// The bytes that get signed (`SPEC.md` §5.3).
     ///
     /// Written field by field, big-endian, in one fixed order. Serde is never
     /// involved: its output can change with version or settings, and a silent
@@ -142,11 +143,11 @@ impl UnsignedEntry {
 }
 
 /// The published message, the log record, and the proof object — one struct
-/// (`DESIGN.md` §3).
+/// (`DESIGN.md` D-008).
 ///
 /// **Untrusted.** An `Entry` is whatever bytes arrived; nothing about it has
 /// been checked. Verification turns it into a [`VerifiedEntry`], and only
-/// that type may influence state (`DESIGN.md`, item 4).
+/// that type may influence state (`SPEC.md` §4.2).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Entry {
     pub mission_id: [u8; 32],
@@ -175,7 +176,7 @@ impl Entry {
         unsigned.signing_bytes()
     }
 
-    /// The full canonical encoding (`docs/spec.md` §8.2): the signing bytes
+    /// The full canonical encoding (`SPEC.md` §5.3): the signing bytes
     /// followed by the signature. This is what the hash chain hashes and what
     /// the golden vector pins.
     pub fn encoded(&self) -> Vec<u8> {
@@ -185,7 +186,7 @@ impl Entry {
     }
 
     /// The link this entry contributes to its successor's `prev` field
-    /// (`docs/spec.md` §8.3): BLAKE3 of the full encoding, signature
+    /// (`SPEC.md` §4.2): BLAKE3 of the full encoding, signature
     /// included, so tampering with a signature breaks every following link.
     pub fn chain_hash(&self) -> Hash {
         Hash::new(&self.encoded())
@@ -197,7 +198,7 @@ impl Entry {
 /// The only way to obtain one is through verification
 /// ([`crate::log::verify_chain`]). Functions that must not see unverified
 /// bytes take this type, so forgetting to verify is a compile error rather
-/// than a runtime bug (`DESIGN.md`, item 4).
+/// than a runtime bug (`SPEC.md` §4.2).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct VerifiedEntry(Entry);
 
@@ -215,7 +216,7 @@ impl VerifiedEntry {
 }
 
 /// The mission's member list and their keys, fixed at mission start
-/// (`DESIGN.md` §7).
+/// (`DESIGN.md` D-005).
 ///
 /// At M1 the roster exists to give the verifier something to check
 /// membership against; M2 will build it for real.
@@ -301,7 +302,7 @@ mod tests {
     #[test]
     fn encoding_covers_the_signature() {
         // The chain hash must change if the signature alone changes: the
-        // full encoding includes it (docs/spec.md §8.3).
+        // full encoding includes it (`SPEC.md` §4.2).
         let entry = unsigned().sign(&key(1));
         let mut forged = entry.clone();
         let mut sig = forged.sig.to_bytes();
@@ -331,7 +332,7 @@ mod tests {
     #[test]
     fn the_two_bodies_never_share_an_encoding() {
         // Distinct tags are what keep a claim from being read as a withdrawal
-        // under the same signature (`docs/spec.md` §8.2).
+        // under the same signature (`SPEC.md` §5.3).
         let (mut claim, mut withdraw) = (Vec::new(), Vec::new());
         Body::TaskClaim {
             task: 7,

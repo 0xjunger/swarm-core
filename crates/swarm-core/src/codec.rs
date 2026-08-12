@@ -1,22 +1,22 @@
-//! Decoding: the inverse of `wire`'s canonical encoders (`docs/spec.md` §20).
+//! Decoding: the inverse of `wire`'s canonical encoders (`SPEC.md` §5.1, §5.4).
 //!
 //! Every decoder here answers exactly one question — "what do these bytes
 //! mean" — never "is this correct". A `LogBundle` chain out of `seq` order,
 //! or with a gap or a duplicate `seq`, decodes cleanly; whether that is a
 //! violation is `swarm-verify`'s question, not this module's
-//! (`docs/spec.md` §20.2).
+//! (`SPEC.md` §6.1).
 //!
 //! Canonicity of the pieces decoded here is not optional, though. Two
 //! distinct byte strings that decoded to the same `VersionVector` would let
 //! an attacker manufacture a fake proof of equivocation and frame an honest
-//! node (`DESIGN.md` §7) — so a vector whose components are not strictly
+//! node (`DESIGN.md` D-008) — so a vector whose components are not strictly
 //! ascending by `NodeId`, including one that names a `NodeId` twice, is
 //! rejected rather than merely re-sorted. An unrecognised `Body` tag is
 //! likewise rejected outright: forward compatibility (silently skipping an
 //! unknown field) is explicitly out of scope for Phase 1
-//! (`docs/spec.md` §20.1, §5 "Kapsam dışı").
+//! (`SPEC.md` §4.1, §5.1).
 //!
-//! Tag bytes are written here as the literals from `docs/spec.md` §8.2,
+//! Tag bytes are written here as the literals from `SPEC.md` §5.3,
 //! independently of `wire::Body::encode` — the same convention the golden
 //! vectors use (`tests/golden_vector.rs`): an inverse that shares code with
 //! the thing it inverts can share a bug with it too.
@@ -95,7 +95,7 @@ fn take_domain_tag<'a>(bytes: &'a [u8], tag: &[u8]) -> Result<&'a [u8], DecodeEr
     Ok(&bytes[tag.len()..])
 }
 
-/// Decodes a `Body` (`docs/spec.md` §8.2): a one-byte tag, then the
+/// Decodes a `Body` (`SPEC.md` §5.3): a one-byte tag, then the
 /// variant's fields.
 pub fn decode_body(bytes: &[u8]) -> Result<(Body, usize), DecodeError> {
     let start_len = bytes.len();
@@ -119,7 +119,7 @@ pub fn decode_body(bytes: &[u8]) -> Result<(Body, usize), DecodeError> {
     Ok((body, start_len - rest.len()))
 }
 
-/// Decodes a `VersionVector` (`docs/spec.md` §8.2): a `u16` count, then that
+/// Decodes a `VersionVector` (`SPEC.md` §5.3): a `u16` count, then that
 /// many `(NodeId, seq)` pairs. Rejects anything not strictly ascending by
 /// `NodeId` — equal or descending, including an outright repeated `NodeId`
 /// — since accepting it would let two different byte strings decode to the
@@ -144,11 +144,11 @@ pub fn decode_version_vector(bytes: &[u8]) -> Result<(VersionVector, usize), Dec
     Ok((vv, start_len - rest.len()))
 }
 
-/// Decodes an `Entry` (`docs/spec.md` §8.2): domain tag, `mission_id`,
+/// Decodes an `Entry` (`SPEC.md` §5.3): domain tag, `mission_id`,
 /// `epoch`, `node`, `seq`, `prev`, `deps`, `body`, `sig` — the exact inverse
 /// of `UnsignedEntry::signing_bytes` plus the trailing signature. Returns
 /// the number of bytes consumed so a caller can decode several entries back
-/// to back without knowing their length in advance (`docs/spec.md` §20.2,
+/// to back without knowing their length in advance (`SPEC.md` §4.4,
 /// `LogBundle`).
 pub fn decode_entry(bytes: &[u8]) -> Result<(Entry, usize), DecodeError> {
     let start_len = bytes.len();
@@ -194,8 +194,8 @@ pub fn decode_entry_exact(bytes: &[u8]) -> Result<Entry, DecodeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::vec::Vec;
     use crate::wire::{UnsignedEntry, PHASE1_EPOCH, PHASE1_MISSION_ID};
+    use alloc::vec::Vec;
     use ed25519_dalek::SigningKey;
 
     fn key(seed: u8) -> SigningKey {
@@ -268,7 +268,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Negative canonicity tests (5 required by `docs/spec.md` §20.1)
+    // Negative canonicity tests (5 required by `SPEC.md` §5.1)
     // -----------------------------------------------------------------
 
     #[test]

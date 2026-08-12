@@ -1,4 +1,4 @@
-//! The six fixture scenarios (`docs/spec.md` §20.7, E7a): built once here,
+//! The six fixture scenarios (`SPEC.md` §8, E7a): built once here,
 //! shared by the regenerator (`examples/gen_fixtures.rs`) and the
 //! consistency test (`tests/fixtures.rs`) via `#[path]` inclusion, so there
 //! is exactly one definition of what each fixture means — never two
@@ -18,6 +18,8 @@ use swarm_core::causal::VersionVector;
 use swarm_core::wire::{Body, Entry, Hash, Roster, UnsignedEntry, PHASE1_EPOCH, PHASE1_MISSION_ID};
 use swarm_core::NodeId;
 
+/// TEST ONLY. DO NOT USE. Every key this function produces is derived from a
+/// single public byte (the seed); none of them protects anything.
 pub fn key(seed: u8) -> SigningKey {
     let mut bytes = [0u8; 32];
     bytes[0] = seed;
@@ -161,7 +163,7 @@ pub fn broken_chain() -> (LogBundle, Spec) {
 /// Every signature verifies, `seq` is contiguous from zero, and the roster
 /// contains the signer — the only thing wrong is the key the second chain
 /// was filed under. `Verdict::chains` must report this as `Misfiled`, not
-/// silently drop it (`docs/spec.md` §20.5).
+/// silently drop it (`SPEC.md` §7.2).
 pub fn misfiled_chain() -> (LogBundle, Spec) {
     let (kg, kh, kf, kd) = (key(30), key(31), key(32), key(33));
     let (g, h, f, d) = (NodeId(0), NodeId(1), NodeId(2), NodeId(3));
@@ -187,7 +189,7 @@ pub fn misfiled_chain() -> (LogBundle, Spec) {
 /// A node whose log never arrived: exactly one observer's view is present.
 /// I3 needs two observers to compare and reports `Undetermined`, not a
 /// violation and not a vacuous `Satisfied` — silence is ambiguous
-/// (`docs/spec.md` §20.2).
+/// (`SPEC.md` §4.4).
 pub fn missing_node() -> (LogBundle, Spec) {
     let (ka, kb) = (key(40), key(41));
     let (a, b) = (NodeId(0), NodeId(1));

@@ -1,0 +1,4 @@
+bundle: truncated.bundle
+spec: truncated.spec
+LogBundle::decode fails with DecodeError::Truncated before verify() ever runs — no Verdict is produced.
+exit code (swarm-verify CLI): 2 — a decode error, not a verification result

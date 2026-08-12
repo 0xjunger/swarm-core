@@ -5,11 +5,14 @@ description = "Verifiable swarm coordination: pure, no_std, sans-I/O state machi
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+repository.workspace = true
+keywords = ["no-std", "distributed-systems", "verification"]
+categories = ["no-std", "cryptography", "data-structures"]
 
-# The zero-dependency era ends at M1, exactly as docs/spec.md §8
-# anticipated: blake3 and ed25519-dalek, both no_std-capable. The crate
-# itself remains no_std — proven by the thumbv7em cross-compile
-# (docs/spec.md §3).
+# The zero-dependency era ends at M1: blake3 and ed25519-dalek, both
+# no_std-capable, per the dependency constraint in `DESIGN.md` D-003. The
+# crate itself remains no_std — proven by the thumbv7em cross-compile
+# (`DESIGN.md` D-003).
 [dependencies]
 blake3.workspace = true
 ed25519-dalek = { workspace = true, features = ["alloc"] }
@@ -21,7 +24,8 @@ proptest = "1"
 [features]
 # Off by default, never enabled in a normal build. Deliberately breaks the
 # task-claim tie-break so it depends on observation order instead of the
-# entry set alone — the negative control for I3 (docs/spec.md §15, §1).
+# entry set alone — the negative control for I3 (`SPEC.md` §6.3;
+# `DESIGN.md` D-009 on why the exit gate needs a negative control).
 # Exists only so `scripts/verify.sh` can prove the checker catches a real
 # divergence.
 mutant-i3 = []

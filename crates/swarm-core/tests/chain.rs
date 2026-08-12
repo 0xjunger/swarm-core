@@ -1,11 +1,11 @@
-//! M1 acceptance tests (`DESIGN.md` §M1, "Bitti sayılır"):
+//! M1 acceptance tests (`DESIGN.md` D-008):
 //!
 //! 1. a chain of **1000 entries** is produced and verified end to end;
 //! 2. one altered byte in a record in the **middle** of the chain breaks
 //!    verification — the mandatory tamper test, and the only concrete
 //!    evidence of the tamper-resistance claim.
 //!
-//! The remaining tests follow M0's discipline (`DESIGN.md` §M6): an
+//! The remaining tests follow M0's discipline (`DESIGN.md` D-009): an
 //! acceptance criterion that can be met vacuously is worth nothing, so every
 //! failure mode of the verifier is shown to actually fire.
 
@@ -54,7 +54,7 @@ fn a_chain_of_1000_entries_verifies_end_to_end() {
     assert_eq!(verified.len(), 1000);
 }
 
-/// The mandatory test (`DESIGN.md` §M1): one byte of a middle record altered
+/// The mandatory test (`DESIGN.md` D-008): one byte of a middle record altered
 /// by hand must break verification. `priority` occupies exactly one byte of
 /// the canonical encoding, so bumping it alters exactly one byte.
 #[test]
@@ -65,7 +65,7 @@ fn one_altered_byte_in_a_middle_entry_breaks_verification() {
     let mut entries = log.entries().to_vec();
     let mid = &mut entries[500];
     // M3 added `Body::Withdraw`, so this destructure is no longer
-    // irrefutable — which is the notice `docs/spec.md` §8.2 intended. It is
+    // irrefutable — which is the notice `SPEC.md` §5.3 intended. It is
     // still `chain_of` that builds this chain and it writes claims only, so
     // the other variant is genuinely unreachable here.
     let Body::TaskClaim { task, priority } = mid.body else {
@@ -254,7 +254,7 @@ fn an_empty_chain_verifies_to_nothing() {
 
 #[test]
 fn the_log_bound_is_enforced_by_refusal() {
-    // docs/spec.md §8.4: eviction is not safe until the MMR exists, so a
+    // SPEC.md §4.2: eviction is not safe until the MMR exists, so a
     // full log refuses to grow rather than silently dropping history.
     let mut log = Log::new(NodeId(0), test_key(5), 2);
     log.append(claim(0), VersionVector::new()).unwrap();

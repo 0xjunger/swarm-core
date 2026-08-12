@@ -3,7 +3,7 @@
 //! No sockets, no threads, no async runtime, no wall clock. Time advances because
 //! the loop in [`sim::run`] increments a counter, and randomness comes from a
 //! single seeded stream. Two runs with the same configuration produce byte-identical
-//! traces — which is M0's entire acceptance criterion (`DESIGN.md` §M0).
+//! traces — which is M0's entire acceptance criterion.
 //!
 //! `turmoil` and `madsim` were considered and rejected: both are built on tokio and
 //! would force async through the whole project for no benefit at this scale.

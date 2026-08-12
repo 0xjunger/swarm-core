@@ -1,8 +1,8 @@
-//! The per-node hash chain (`DESIGN.md` §4.3, §5): the write path.
+//! The per-node hash chain (`DESIGN.md` D-008, D-002): the write path.
 //!
-//! The proof path — the MMR — arrives later (`DESIGN.md` §4.3). Until it
+//! The proof path — the MMR — arrives later (`DESIGN.md` D-008). Until it
 //! does, the chain keeps every entry, and its bound is enforced by refusing
-//! to grow rather than by evicting (`docs/spec.md` §8.4).
+//! to grow rather than by evicting (`SPEC.md` §4.2).
 
 use alloc::vec::Vec;
 
@@ -18,7 +18,7 @@ use crate::NodeId;
 ///
 /// `PartialEq`/`Eq` derive cleanly: `SigningKey` implements both (a
 /// constant-time comparison), which is what lets [`crate::State`] keep
-/// deriving them once it embeds a `Log` (`docs/spec.md` §9.6).
+/// deriving them once it embeds a `Log`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Log {
     me: NodeId,
@@ -33,22 +33,22 @@ pub struct Log {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LogError {
     /// The chain has reached its stated bound. Eviction is not safe until the
-    /// MMR exists (`DESIGN.md` §4.3), so a full log refuses rather than drops
-    /// (`docs/spec.md` §8.4).
+    /// MMR exists (`DESIGN.md` D-008), so a full log refuses rather than drops
+    /// (`SPEC.md` §4.2).
     Full,
 }
 
 impl Log {
     /// Creates an empty chain for `me`, bounded by `cap`.
     ///
-    /// Phase 1 fixes `mission_id` and `epoch` (`docs/spec.md` §8.1); the
+    /// Phase 1 fixes `mission_id` and `epoch` (`SPEC.md` §4.1); the
     /// fields exist now so that real values later change nothing structural.
     ///
     /// # Panics
     ///
     /// If `cap` is zero: a chain that can never hold an entry is a
     /// configuration error, and every structure in this system has a stated,
-    /// usable bound (`DESIGN.md` §7).
+    /// usable bound (`DESIGN.md` D-013).
     pub fn new(me: NodeId, key: SigningKey, cap: usize) -> Self {
         assert!(cap >= 1, "log cap must be at least 1");
         Log {
@@ -76,7 +76,7 @@ impl Log {
     /// The `seq` the next appended entry will carry.
     ///
     /// It is derived from the chain length, so a `seq` can never be reused:
-    /// crash monotonicity (`DESIGN.md` §4.3) holds structurally here, because
+    /// crash monotonicity (`DESIGN.md` D-008) holds structurally here, because
     /// a pure state machine has no persistent tail to lose.
     pub fn next_seq(&self) -> u64 {
         self.entries.len() as u64
@@ -86,7 +86,7 @@ impl Log {
     /// it. Returns the recorded entry.
     ///
     /// `deps` is the caller's causal snapshot at the moment of authorship
-    /// (`docs/spec.md` §9.2) — empty at M1, populated from M2 onward. The
+    /// (`SPEC.md` §4.3) — empty at M1, populated from M2 onward. The
     /// field is activated here, not reinterpreted: M1 callers pass
     /// `VersionVector::new()` and their behaviour is unchanged.
     pub fn append(&mut self, body: Body, deps: VersionVector) -> Result<&Entry, LogError> {
@@ -122,7 +122,7 @@ pub enum ChainError {
         found: NodeId,
     },
     /// Cross-mission replay: the entry names a different mission than the
-    /// roster's (`DESIGN.md` §3).
+    /// roster's (`DESIGN.md` D-008).
     WrongMission { index: usize },
     /// The entry names a different roster version than the roster's.
     WrongEpoch { index: usize },
@@ -141,12 +141,12 @@ pub enum ChainError {
 }
 
 /// Verifies a single entry against a specific expected position in some
-/// chain (`docs/spec.md` §8.3, minus the single-author check, which only
+/// chain (`SPEC.md` §4.2, minus the single-author check, which only
 /// makes sense across a batch — see [`verify_chain`]).
 ///
 /// The check order is fixed: membership, mission, epoch, seq, link,
 /// signature. `index` is only used to label errors; callers outside a batch
-/// (M2's causal delivery, `docs/spec.md` §9.3) may pass `0`.
+/// (M2's causal delivery, `SPEC.md` §4.3) may pass `0`.
 pub fn verify_next(
     roster: &Roster,
     index: usize,
@@ -186,7 +186,7 @@ pub fn verify_next(
     Ok(VerifiedEntry::from_verified(entry.clone()))
 }
 
-/// Verifies a chain end to end (`docs/spec.md` §8.3) and returns its
+/// Verifies a chain end to end (`SPEC.md` §4.2) and returns its
 /// entries as [`VerifiedEntry`], or the first failure.
 ///
 /// The check order is fixed: membership, single-author, mission, epoch, seq,

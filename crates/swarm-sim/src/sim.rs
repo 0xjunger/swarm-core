@@ -1,14 +1,16 @@
 //! The tick loop.
 //!
-//! `DESIGN.md` §M0 describes this as "a plain `for` loop of about 150 lines: one
+//! `DESIGN.md` D-002 describes this as "a plain `for` loop of about 150 lines: one
 //! message queue, one node list, one seeded random number generator". That is what
 //! this is. It is written *before* any protocol exists, because a simulator written
 //! afterwards would be a simulator wrapped around code that already assumed sockets
 //! and sleeps — and that cannot be undone.
 //!
-//! The ordering below is normative and is specified in `docs/spec.md` §6. It is not
-//! an implementation detail: determinism is not a consequence of this code being
-//! single-threaded, it is a consequence of this order being fixed and total.
+//! The ordering below is fixed and total, and the simulator's own determinism
+//! depends on it. It is not an implementation detail: determinism is not a
+//! consequence of this code being single-threaded, it is a consequence of
+//! this order being fixed and total (`SPEC.md` §10, "the channel model is not
+//! part of `V`").
 
 use ed25519_dalek::SigningKey;
 use std::collections::{BTreeMap, BTreeSet};
@@ -26,42 +28,40 @@ pub struct SimConfig {
     pub nodes: u8,
     pub seed: u64,
     pub ticks: u64,
-    /// Message loss, in parts per thousand. An integer, never a float — see
-    /// `docs/spec.md` §5.3.
+    /// Message loss, in parts per thousand. An integer, never a float.
     pub loss_permille: u32,
     /// Must be >= 1. See rule R1.
     pub delay_min: u64,
     pub delay_max: u64,
     pub queue_cap: usize,
     /// A node creates and broadcasts a new entry when `tick % entry_period
-    /// == 0` (`docs/spec.md` §9.5). Replaces M0/M1's `beacon_period`.
+    /// == 0`. Replaces M0/M1's `beacon_period`.
     pub entry_period: u64,
     /// A node advertises its version vector when `tick % anti_entropy_period
-    /// == 0` (`docs/spec.md` §9.5).
+    /// == 0`.
     pub anti_entropy_period: u64,
-    /// Bound on each node's own hash chain (`docs/spec.md` §8.4).
+    /// Bound on each node's own hash chain (`SPEC.md` §4.2).
     pub log_cap: usize,
-    /// Bound on each node's causal buffer (`docs/spec.md` §9.4).
+    /// Bound on each node's causal buffer (`DESIGN.md` D-013).
     pub buffer_cap: usize,
     /// Scripted partition changes, applied at the top of the named tick. M5's
     /// randomised churn will be a seeded *generator of this same script*; the loop
     /// below does not change.
     pub partitions: Vec<(u64, Partition)>,
-    /// A deliberately faulty node, if any (`docs/spec.md` §11, M4): the
-    /// channel still only drops and delays (`docs/spec.md` §14, "Byzantine
-    /// transport" stays out of scope) — the *node* forges, at the protocol
-    /// layer, by having its genesis entry re-signed differently for each
-    /// listed victim.
+    /// A deliberately faulty node, if any (`DESIGN.md` D-007): the channel
+    /// still only drops and delays — "Byzantine transport" stays out of
+    /// scope — the *node* forges, at the protocol layer, by having its
+    /// genesis entry re-signed differently for each listed victim.
     pub equivocation: Option<Equivocation>,
-    /// Per-node escrow allocation (`docs/spec.md` §13, M5). Defaults to 3
-    /// per `DESIGN.md` M5. Nodes issue one `Spend { amount: 1 }` per
+    /// Per-node escrow allocation (`SPEC.md` §6.4). Defaults to 3, M5's
+    /// original convention. Nodes issue one `Spend { amount: 1 }` per
     /// `entry_period` tick while budget remains.
     pub budget_per_node: u64,
 }
 
 /// A node that signs two different genesis entries — one real, one forged
 /// per victim — and sends each victim the one meant for it (`DESIGN.md`
-/// §4.4's demo scenario).
+/// D-007's demo scenario).
 #[derive(Clone, Debug)]
 pub struct Equivocation {
     pub node: NodeId,
@@ -106,8 +106,8 @@ impl SimConfig {
 }
 
 /// A deterministic per-node signing key, derived from `NodeId` alone — never
-/// drawn from `SimRng`, so it cannot perturb rule R2's draw-count contract
-/// (`docs/spec.md` §6). Same convention as `swarm-core`'s own test keys.
+/// drawn from `SimRng`, so it cannot perturb rule R2's draw-count contract.
+/// Same convention as `swarm-core`'s own test keys.
 fn node_key(node: NodeId) -> SigningKey {
     let mut bytes = [0u8; 32];
     bytes[0] = node.0.wrapping_add(1);
@@ -115,10 +115,10 @@ fn node_key(node: NodeId) -> SigningKey {
 }
 
 /// The shared mission roster: every node's identity and verifying key,
-/// fixed for the whole run (`DESIGN.md` §7). Public so a test or example can
-/// build the same roster a third party would hold to verify a proof of
-/// equivocation without running the simulator itself (`docs/spec.md` §11,
-/// M4) — nothing here is simulator-internal, it is just public keys.
+/// fixed for the whole run (`DESIGN.md` D-005). Public so a test or example
+/// can build the same roster a third party would hold to verify a proof of
+/// equivocation without running the simulator itself (`DESIGN.md` D-007) —
+/// nothing here is simulator-internal, it is just public keys.
 pub fn build_roster(nodes: &[NodeId]) -> Roster {
     let keys = nodes
         .iter()
@@ -128,10 +128,10 @@ pub fn build_roster(nodes: &[NodeId]) -> Roster {
 }
 
 /// A different, validly signed entry at the same `(node, seq, prev, deps)` as
-/// `original` — the forged half of an equivocation (`docs/spec.md` §11, M4).
+/// `original` — the forged half of an equivocation (`DESIGN.md` D-007).
 /// Re-signed with the same node's own key: the simulator forges *as* the
-/// faulty node, not as the channel, keeping `docs/spec.md` §14's "Byzantine
-/// transport" boundary honest.
+/// faulty node, not as the channel, keeping the "Byzantine transport"
+/// boundary honest.
 fn forge_alt_entry(original: &swarm_core::wire::Entry, node: NodeId) -> swarm_core::wire::Entry {
     let alt_body = match original.body {
         Body::TaskClaim { task, priority } => Body::TaskClaim {
@@ -159,10 +159,10 @@ fn forge_alt_entry(original: &swarm_core::wire::Entry, node: NodeId) -> swarm_co
 
 /// If `cfg` names `from` as the equivocator and `to` as one of its victims,
 /// swaps the genesis entry for a differently signed copy at the same
-/// `(node, seq)` (`docs/spec.md` §11, M4). Only the genesis entry is forged:
+/// `(node, seq)` (`DESIGN.md` D-007). Only the genesis entry is forged:
 /// once a victim holds the forged copy, the equivocator's later entries fail
 /// `BadPrevLink` at that victim by the ordinary chain-verification rule
-/// (`docs/spec.md` §8.3) — no further forging is needed to keep the two
+/// (`SPEC.md` §4.2) — no further forging is needed to keep the two
 /// sides apart. Every other `(from, to, payload)` triple passes through
 /// unchanged.
 fn maybe_forge(cfg: &SimConfig, from: NodeId, to: NodeId, payload: Envelope) -> Envelope {
@@ -186,15 +186,12 @@ pub fn run(cfg: &SimConfig) -> Trace {
 /// Runs a simulation to completion and returns its trace *and* every node's
 /// final `State` — the M2 acceptance test and the `converge` example need to
 /// inspect each node's entries and version vector directly, not just the
-/// trace (`docs/spec.md` §9.6).
+/// trace.
 pub fn run_with_states(cfg: &SimConfig) -> (Trace, BTreeMap<NodeId, State>) {
     // R1. Without this an effect produced during tick N could be delivered during
     // tick N, and the resulting order would depend on iteration sequence rather
     // than on any stated rule.
-    assert!(
-        cfg.delay_min >= 1,
-        "delay_min must be >= 1 (docs/spec.md §6 R1)"
-    );
+    assert!(cfg.delay_min >= 1, "delay_min must be >= 1 (R1)");
     assert!(
         cfg.delay_min <= cfg.delay_max,
         "delay_min must not exceed delay_max"
@@ -277,7 +274,11 @@ pub fn run_with_states(cfg: &SimConfig) -> (Trace, BTreeMap<NodeId, State>) {
                 // Never authoring: only relaying (anti-entropy push replies,
                 // §9.5) — see `emit`'s `authoring` parameter.
                 emit(
-                    &mut Runtime { trace: &mut trace, net: &mut net, rng: &mut rng },
+                    &mut Runtime {
+                        trace: &mut trace,
+                        net: &mut net,
+                        rng: &mut rng,
+                    },
                     cfg,
                     dest,
                     tick,
@@ -293,11 +294,15 @@ pub fn run_with_states(cfg: &SimConfig) -> (Trace, BTreeMap<NodeId, State>) {
             trace_state_diff(&mut trace, node, tick, &states[&node], &next);
             states.insert(node, next);
             // The only phase in which a node can author a brand-new entry
-            // (`author` is only called from `Event::Tick`, `docs/spec.md`
-            // §10.6) — so it is the only phase in which equivocation's
-            // one-time forged genesis broadcast can legitimately happen.
+            // (`author` is only called from `Event::Tick`) — so it is the
+            // only phase in which equivocation's one-time forged genesis
+            // broadcast can legitimately happen.
             emit(
-                &mut Runtime { trace: &mut trace, net: &mut net, rng: &mut rng },
+                &mut Runtime {
+                    trace: &mut trace,
+                    net: &mut net,
+                    rng: &mut rng,
+                },
                 cfg,
                 node,
                 tick,
@@ -320,10 +325,9 @@ pub fn run_with_states(cfg: &SimConfig) -> (Trace, BTreeMap<NodeId, State>) {
 }
 
 /// Derives `Apply`/`Buffer`/`DropCausalOverflow` trace records by diffing a
-/// node's `State` before and after one `step` call (`docs/spec.md` §9.6).
-/// `step` itself stays pure and returns only `Effect`s — this is bookkeeping
-/// the simulator does on the side, not a change to the core's contract
-/// (`docs/spec.md` §3.3).
+/// node's `State` before and after one `step` call. `step` itself stays pure
+/// and returns only `Effect`s — this is bookkeeping the simulator does on
+/// the side, not a change to the core's contract (`DESIGN.md` D-002).
 fn trace_state_diff(trace: &mut Trace, node: NodeId, tick: u64, old: &State, new: &State) {
     // Every entry newly reflected in `causal_vv`, ascending by origin (R4)
     // then by seq — covers direct application and buffer-drain alike, since
@@ -354,7 +358,7 @@ fn trace_state_diff(trace: &mut Trace, node: NodeId, tick: u64, old: &State, new
         });
     }
     // A key that left the buffer without being applied this tick was
-    // evicted for space, not delivered (`docs/spec.md` §9.4).
+    // evicted for space, not delivered (`DESIGN.md` D-013).
     for &(origin, seq) in old_buf.difference(&new_buf) {
         if !applied.contains(&(origin, seq)) {
             trace.push(TraceRecord::DropCausalOverflow {
@@ -366,7 +370,7 @@ fn trace_state_diff(trace: &mut Trace, node: NodeId, tick: u64, old: &State, new
         }
     }
 
-    // A newly verified proof of equivocation (`docs/spec.md` §11, M4). At
+    // A newly verified proof of equivocation (`DESIGN.md` D-007). At
     // most one proof is kept per accused node (`swarm-core`'s own bound), so
     // the diff is just "which accused nodes are new since last step".
     let old_faulty: BTreeSet<NodeId> = old.poes().map(|p| p.node()).collect();
@@ -385,9 +389,9 @@ fn trace_state_diff(trace: &mut Trace, node: NodeId, tick: u64, old: &State, new
 /// Hands the core's effects to the channel.
 ///
 /// `authoring` is `true` only for effects produced by `Event::Tick` — the
-/// one path that can call `author` (`docs/spec.md` §10.6) and therefore the
-/// only point at which a faulty node's one-time forged genesis broadcast may
-/// legitimately be substituted (`docs/spec.md` §11, M4). Effects produced by
+/// one path that can call `author` and therefore the only point at which a
+/// faulty node's one-time forged genesis broadcast may legitimately be
+/// substituted (`DESIGN.md` D-007). Effects produced by
 /// `Event::Recv` are always a relay of something already stored — an
 /// anti-entropy push reply, possibly of the equivocator's own honestly-held
 /// entry — and must pass through unforged, or a victim could never receive
@@ -401,11 +405,18 @@ struct Runtime<'a> {
     rng: &'a mut SimRng,
 }
 
-fn emit(rt: &mut Runtime, cfg: &SimConfig, from: NodeId, tick: u64, effects: Vec<Effect>, authoring: bool) {
+fn emit(
+    rt: &mut Runtime,
+    cfg: &SimConfig,
+    from: NodeId,
+    tick: u64,
+    effects: Vec<Effect>,
+    authoring: bool,
+) {
     for e in effects {
         let Effect::Send { to, payload } = e;
         // A faulty node signs a different genesis entry per victim
-        // (`docs/spec.md` §11, M4); an honest run's `cfg.equivocation` is
+        // (`DESIGN.md` D-007); an honest run's `cfg.equivocation` is
         // `None` and this is a no-op either way.
         let payload = if authoring {
             maybe_forge(cfg, from, to, payload)

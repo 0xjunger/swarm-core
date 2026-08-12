@@ -1,7 +1,6 @@
-//! `swarm-verify --bundle <path> --spec <path> [--json]` (`docs/spec.md`
-//! §20.6) — the binary a stranger runs. It reads exactly two files and
-//! prints a [`Verdict`]; it has no access to, and no notion of, the process
-//! that produced them.
+//! `swarm-verify --bundle <path> --spec <path> [--json]` — the binary a
+//! stranger runs. It reads exactly two files and prints a [`Verdict`]; it
+//! has no access to, and no notion of, the process that produced them.
 //!
 //! Exit codes: `0` every invariant `Satisfied` and no chain finding; `1` at
 //! least one `Violated` invariant or chain finding; `2` a decode, format, or
@@ -143,7 +142,7 @@ fn describe_witness(witness: &Witness) -> String {
             missing,
         } => format!(
             "observer {} holds entry (author {}, seq {}) with unmet dependency (author {}, seq {})",
-            observer.0, entry.node.0, entry.seq, missing.0.0, missing.1
+            observer.0, entry.node.0, entry.seq, missing.0 .0, missing.1
         ),
         Witness::Divergence { a, b, task, .. } => format!(
             "observers {} and {} disagree on the winner of task {}",
@@ -185,11 +184,11 @@ fn describe_chain_finding(finding: &ChainFinding) -> String {
 //
 // Hand-written, no serde: consistent with `swarm-core`'s own rule against
 // letting a general-purpose serializer decide the shape of anything this
-// project claims is canonical (`docs/spec.md` §8.2). Every raw `Entry`
+// project claims is canonical (`SPEC.md` §5.1). Every raw `Entry`
 // referenced by a witness is emitted as its hex-encoded full canonical
-// encoding (`docs/spec.md` §8.2) — not summarised — so a reader can decode
+// encoding (`SPEC.md` §5.3) — not summarised — so a reader can decode
 // and check it independently, the same discipline `Witness` itself follows
-// (`docs/spec.md` §20.4).
+// (`SPEC.md` §4.6).
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -238,7 +237,10 @@ fn json_result(result: &InvariantResult) -> String {
     match result {
         InvariantResult::Satisfied => "{\"status\":\"Satisfied\"}".to_string(),
         InvariantResult::Violated(w) => {
-            format!("{{\"status\":\"Violated\",\"witness\":{}}}", json_witness(w))
+            format!(
+                "{{\"status\":\"Violated\",\"witness\":{}}}",
+                json_witness(w)
+            )
         }
         InvariantResult::Undetermined(reason) => format!(
             "{{\"status\":\"Undetermined\",\"reason\":{}}}",
@@ -305,10 +307,13 @@ fn json_claim(claim: Option<&swarm_core::state::Claim>) -> String {
 
 fn json_chain_finding(finding: &ChainFinding) -> String {
     let problem = match &finding.error {
-        ChainProblem::Chain(e) => format!("{{\"kind\":\"ChainError\",\"detail\":{}}}", json_string(&format!("{e:?}"))),
-        ChainProblem::TooLong { cap, actual } => format!(
-            "{{\"kind\":\"TooLong\",\"cap\":{cap},\"actual\":{actual}}}"
+        ChainProblem::Chain(e) => format!(
+            "{{\"kind\":\"ChainError\",\"detail\":{}}}",
+            json_string(&format!("{e:?}"))
         ),
+        ChainProblem::TooLong { cap, actual } => {
+            format!("{{\"kind\":\"TooLong\",\"cap\":{cap},\"actual\":{actual}}}")
+        }
         ChainProblem::Misfiled { declared, actual } => format!(
             "{{\"kind\":\"Misfiled\",\"declared\":{},\"actual\":{}}}",
             declared.0, actual.0
@@ -318,7 +323,12 @@ fn json_chain_finding(finding: &ChainFinding) -> String {
         "{{\"observer\":{},\"author\":{},\"error\":{problem},\"entries\":[{}]}}",
         finding.observer.0,
         finding.author.0,
-        finding.entries.iter().map(json_entry).collect::<Vec<_>>().join(",")
+        finding
+            .entries
+            .iter()
+            .map(json_entry)
+            .collect::<Vec<_>>()
+            .join(",")
     )
 }
 
@@ -341,8 +351,12 @@ mod tests {
 
     #[test]
     fn parse_args_defaults_json_to_false() {
-        let args = parse_args(["--bundle", "a.bundle", "--spec", "b.spec"].into_iter().map(String::from))
-            .unwrap();
+        let args = parse_args(
+            ["--bundle", "a.bundle", "--spec", "b.spec"]
+                .into_iter()
+                .map(String::from),
+        )
+        .unwrap();
         assert!(!args.json);
     }
 

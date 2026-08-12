@@ -1,11 +1,11 @@
-//! M4's acceptance test (`DESIGN.md` §9, "Bitti sayılır", verbatim):
+//! M4's acceptance test (`DESIGN.md` D-007):
 //!
 //! A deliberately faulty node signs two different entries at the same
 //! `(node, seq)` and sends one to each side. When the two honest nodes
-//! exchange what they have (anti-entropy, `docs/spec.md` §11), each
-//! independently produces a proof of equivocation — and a third party
-//! holding only the roster verifies it unilaterally, with no further
-//! context and no agreement from anyone.
+//! exchange what they have (anti-entropy), each independently produces a
+//! proof of equivocation — and a third party holding only the roster
+//! verifies it unilaterally, with no further context and no agreement from
+//! anyone.
 
 use ed25519_dalek::Signature;
 use std::collections::BTreeSet;
@@ -43,7 +43,7 @@ fn cfg(seed: u64, loss_permille: u32, ticks: u64) -> SimConfig {
         // F signs one genesis entry for A (the real one, since A is not
         // listed as a victim) and a different one for B. No partition is
         // needed: the two conflicting entries reach A and B directly, and
-        // anti-entropy's overlap-by-one reply (`docs/spec.md` §11) is what
+        // anti-entropy's overlap-by-one reply (`DESIGN.md` D-007) is what
         // lets each side eventually see the other's copy.
         equivocation: Some(Equivocation {
             node: F,
@@ -54,7 +54,7 @@ fn cfg(seed: u64, loss_permille: u32, ticks: u64) -> SimConfig {
 }
 
 /// `verify_poe` needs only a roster of public keys, never a simulator or a
-/// trace, to reach a verdict (`DESIGN.md` §4.4) — this is the same roster
+/// trace, to reach a verdict (`DESIGN.md` D-007) — this is the same roster
 /// `run_with_states` builds internally, rebuilt here to make the point that
 /// no simulator state is required to check a proof.
 fn roster3() -> Roster {
@@ -81,8 +81,10 @@ fn both_honest_nodes_independently_prove_the_same_equivocation() {
     assert_eq!(a_poe.seq(), 0);
 
     // A third party — no simulator, no trace, just the roster — reaches the
-    // same verdict on its own (`DESIGN.md` §4.4: "kanıt kendi kendini
-    // doğruladığı için suçlu node'u dışlamak konsensüs gerektirmez").
+    // same verdict on its own (`DESIGN.md` D-007: "a third party holding
+    // only the roster's public keys, who never ran the mission and never
+    // exchanged anything with whoever raised the accusation, reaches the
+    // identical verdict from the two signatures alone").
     let roster = roster3();
     assert!(verify_poe(&roster, a_poe).is_ok());
     assert!(verify_poe(&roster, b_poe).is_ok());
@@ -123,9 +125,9 @@ fn honest_nodes_never_produce_a_false_accusation() {
 #[test]
 fn detection_holds_under_loss_across_seeds() {
     // Loss and delay only ever *postpone* detection here, never prevent it:
-    // the overlap-by-one reply (`docs/spec.md` §11) is re-offered on every
+    // the overlap-by-one reply (`DESIGN.md` D-007) is re-offered on every
     // anti-entropy round, and a dropped message is simply retried at the
-    // next one (`docs/spec.md` §5.5, §9.5). 300 ticks gives ~14 rounds at
+    // next one. 300 ticks gives ~14 rounds at
     // this `anti_entropy_period`, comfortably enough at 5% loss for both
     // directions to land at least once.
     for seed in 0..20 {

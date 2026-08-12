@@ -5,7 +5,7 @@
 //!   cargo run -q -p swarm-core --example chain -- --len 5000
 //!
 //! This is the visible form of the acceptance tests in `tests/chain.rs`:
-//! the tamper-resistance claim of `DESIGN.md` §M1, demonstrated rather than
+//! the tamper-resistance claim of `DESIGN.md` D-008, demonstrated rather than
 //! asserted. Terminal output only — GUIs and visualisation are out of scope
 //! for all of Phase 1.
 
@@ -22,7 +22,7 @@ fn main() {
     let len = flag(&args, "--len").unwrap_or(1000) as usize;
 
     // A deterministic key, injected by the caller: the core never generates
-    // randomness (DESIGN.md §11.1).
+    // randomness (DESIGN.md D-002).
     let mut seed = [0u8; 32];
     seed[0] = 1;
     let key = SigningKey::from_bytes(&seed);
@@ -32,7 +32,7 @@ fn main() {
     keys.insert(node, key.verifying_key());
     let roster = Roster::new(PHASE1_MISSION_ID, PHASE1_EPOCH, keys);
 
-    println!("M1 — one node, a signed hash chain (docs/spec.md §8)");
+    println!("M1 — one node, a signed hash chain (SPEC.md §4.1, §5)");
     println!();
 
     // 1. Build.
@@ -98,7 +98,7 @@ fn main() {
         Err(e) => println!("FAILED at: {e:?}"),
     }
     println!("          one altered byte broke the chain — the tamper-resistance");
-    println!("          claim of DESIGN.md §M1, demonstrated rather than asserted");
+    println!("          claim of DESIGN.md D-008, demonstrated rather than asserted");
     println!();
 
     // 4. Restore, then attack invariant I1 instead: the same (node, seq) twice.

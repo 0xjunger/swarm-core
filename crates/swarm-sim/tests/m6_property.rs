@@ -4,7 +4,7 @@
 //!
 //! `mutant_i3_detection` proves the checker catches a real bug: it is the
 //! same test compiled twice, clean and against the `mutant-i3` feature, and
-//! only the mutant build is expected to fail (docs/spec.md §15, §1).
+//! only the mutant build is expected to fail.
 
 use proptest::prelude::*;
 
@@ -56,7 +56,7 @@ proptest! {
 /// `next_task` makes task 0 the first thing every node claims) a competing
 /// claim for task 0, exchanges the two resulting entries, and checks what
 /// `check_invariants` says about the result. This test is compiled and run
-/// twice, unmodified (docs/spec.md §15, §1) — the mutation lives in
+/// twice, unmodified — the mutation lives in
 /// `swarm_core::state::Claims::winner`'s tie-break behind `#[cfg(feature =
 /// "mutant-i3")]`, not in this test:
 ///
@@ -101,15 +101,33 @@ fn mutant_i3_detection() {
     // priority, a genuine tie decided only by the tie-break rule.
     let sa0 = State::new(a, roster.clone(), ka, 64, 8, 1, 0);
     let (sa1, fx_a) = step(&sa0, Event::Tick, LogicalTime(1));
-    let Effect::Send { payload: claim_a, .. } = fx_a[0].clone();
+    let Effect::Send {
+        payload: claim_a, ..
+    } = fx_a[0].clone();
 
     let sb0 = State::new(b, roster.clone(), kb, 64, 8, 1, 0);
     let (sb1, fx_b) = step(&sb0, Event::Tick, LogicalTime(1));
-    let Effect::Send { payload: claim_b, .. } = fx_b[0].clone();
+    let Effect::Send {
+        payload: claim_b, ..
+    } = fx_b[0].clone();
 
     // Exchange: each node receives the other's claim.
-    let (sa2, _) = step(&sa1, Event::Recv { from: b, payload: claim_b }, LogicalTime(2));
-    let (sb2, _) = step(&sb1, Event::Recv { from: a, payload: claim_a }, LogicalTime(2));
+    let (sa2, _) = step(
+        &sa1,
+        Event::Recv {
+            from: b,
+            payload: claim_b,
+        },
+        LogicalTime(2),
+    );
+    let (sb2, _) = step(
+        &sb1,
+        Event::Recv {
+            from: a,
+            payload: claim_a,
+        },
+        LogicalTime(2),
+    );
 
     let mut states = BTreeMap::new();
     states.insert(a, sa2);

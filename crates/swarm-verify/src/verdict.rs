@@ -1,11 +1,11 @@
-//! `Verdict` and `Witness` (`docs/spec.md` §20.4): what `verify` (§20.5)
+//! `Verdict` and `Witness` (`SPEC.md` §4.6): what `verify` (§7.3)
 //! hands back.
 //!
 //! Every `Violated` result carries a [`Witness`] — the minimal raw signed
 //! [`Entry`] values that show the violation. A reader checks a witness
 //! independently, against the roster alone, never taking `verify`'s word for
 //! it: that is the entire difference between a *verifier* and an *oracle*
-//! (`docs/spec.md` §20).
+//! (`DESIGN.md` D-010).
 
 use swarm_core::fault::Poe;
 use swarm_core::log::ChainError;
@@ -25,7 +25,7 @@ pub enum InvariantResult {
     /// biggest witness even when it is `Satisfied`.
     Violated(Box<Witness>),
     /// The bundle does not contain enough evidence to say either way. The
-    /// string names what was missing (`docs/spec.md` §20.5) — e.g. an
+    /// string names what was missing (`SPEC.md` §4.6) — e.g. an
     /// invariant that needs two observers of the same entry set, and the
     /// bundle holds only one.
     Undetermined(&'static str),
@@ -34,7 +34,7 @@ pub enum InvariantResult {
 /// Self-contained evidence of a specific violation. Every variant carries
 /// raw signed `Entry` values, never a summary, a hash, or a derived value —
 /// the reader must be able to check the signatures against the roster
-/// themselves (`docs/spec.md` §20.4).
+/// themselves (`SPEC.md` §4.6).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Witness {
     /// I1. Self-verifying: roster plus the two signatures is enough
@@ -66,19 +66,25 @@ pub enum Witness {
 }
 
 /// Why a chain was rejected before any invariant check ran against it:
-/// either `swarm_core::log::verify_chain`'s own seven checks (§8.3), or a
-/// chain longer than `spec.log_cap` — a `Spec`-level rule (§20.3) foreign to
-/// §8.3's chain verification itself, so it gets its own variant rather than
+/// either `swarm_core::log::verify_chain`'s own seven checks (§4.2), or a
+/// chain longer than `spec.log_cap` — a `Spec`-level rule (§4.5) foreign to
+/// §4.2's chain verification itself, so it gets its own variant rather than
 /// being folded into `ChainError`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ChainProblem {
     Chain(ChainError),
-    TooLong { cap: u32, actual: usize },
+    TooLong {
+        cap: u32,
+        actual: usize,
+    },
     /// The chain was filed under an author key its entries do not claim.
-    /// Not a `ChainError`: §8.3's chain verification only sees a slice of
+    /// Not a `ChainError`: §4.2's chain verification only sees a slice of
     /// entries and has no notion of the key they were filed under, so this
-    /// is a `LogBundle`-level defect (§20.2), reported here.
-    Misfiled { declared: NodeId, actual: NodeId },
+    /// is a `LogBundle`-level defect (§4.4), reported here.
+    Misfiled {
+        declared: NodeId,
+        actual: NodeId,
+    },
 }
 
 /// A chain that failed structural verification.
@@ -96,7 +102,7 @@ pub struct ChainFinding {
     pub entries: Vec<Entry>,
 }
 
-/// The result of `verify(bundle, spec)` (`docs/spec.md` §20.5).
+/// The result of `verify(bundle, spec)` (`SPEC.md` §4.6).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Verdict {
     /// Chains that failed structural verification before any invariant
@@ -109,20 +115,20 @@ pub struct Verdict {
     /// I5/I6 are structural properties of the source code
     /// (`swarm-core/src/policy.rs`), not something a log of signed entries
     /// can attest to either way — nothing at runtime to check, so nothing to
-    /// put here beyond this note (`docs/spec.md` §15).
+    /// put here beyond this note (`SPEC.md` §6.5–§6.6).
     pub structural_note: &'static str,
     /// Always `false` in Phase 1. Kept as a field, not a comment, so the
     /// epistemic ceiling is enforced by the type rather than by
     /// documentation someone could fail to read: "no rule violated" is not
-    /// "the input was attested to be genuine" (`docs/spec.md` §20.4).
+    /// "the input was attested to be genuine" (`SPEC.md` §4.6).
     pub input_attestable: bool,
 }
 
 impl Verdict {
     /// `true` if every invariant is `Satisfied` and no chain failed
-    /// structural verification — the CLI's exit-code-0 condition
-    /// (`docs/spec.md` §20.6). `Undetermined` does not count as a failure
-    /// here; it is reported, not treated as a violation.
+    /// structural verification — the CLI's exit-code-0 condition.
+    /// `Undetermined` does not count as a failure here; it is reported, not
+    /// treated as a violation.
     pub fn all_satisfied(&self) -> bool {
         self.chains.is_empty()
             && [&self.i1, &self.i2, &self.i3, &self.i4]

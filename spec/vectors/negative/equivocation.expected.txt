@@ -1,0 +1,8 @@
+bundle: equivocation.bundle
+spec: equivocation.spec
+chains: none
+I1: Violated — Witness::Equivocation (accused node 2)
+I2: Satisfied
+I3: Violated — Witness::Divergence (observers 0 and 1 disagree on the winner of task 1, as a direct consequence of the same equivocation)
+I4: Satisfied
+exit code (swarm-verify CLI): 1

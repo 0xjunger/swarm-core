@@ -1,12 +1,12 @@
 //! The canonical run trace — M0's deliverable.
 //!
 //! Two runs of the same configuration must produce byte-identical traces. That is
-//! the whole acceptance criterion for this milestone (`DESIGN.md` §M0), so the
-//! encoding rules matter as much as the contents. See `docs/spec.md` §7.
+//! the whole acceptance criterion for this milestone, so the encoding rules matter
+//! as much as the contents.
 //!
-//! This is also the ancestor of the replay capability in `DESIGN.md` §5.2: the
-//! black-box claim is that a recorded run can be fed back and produce the same
-//! decisions.
+//! This is also the ancestor of the replay capability `DESIGN.md` D-002 lists among
+//! the sans-I/O boundary's goals: the black-box claim is that a recorded run can be
+//! fed back and produce the same decisions.
 
 use std::fmt::Write as _;
 use swarm_core::causal::VersionVector;
@@ -64,9 +64,9 @@ pub enum TraceRecord {
         at: u64,
         groups: String,
     },
-    /// A node applied entry `(origin, seq)` to its state (`docs/spec.md`
-    /// §9.3). Derived by diffing `State` before/after a `step` call — `step`
-    /// itself stays pure and returns only `Effect`s (`docs/spec.md` §3.3).
+    /// A node applied entry `(origin, seq)` to its state (`SPEC.md` §4.3).
+    /// Derived by diffing `State` before/after a `step` call — `step`
+    /// itself stays pure and returns only `Effect`s (`DESIGN.md` D-002).
     Apply {
         at: u64,
         node: NodeId,
@@ -74,7 +74,7 @@ pub enum TraceRecord {
         seq: u64,
     },
     /// A node buffered entry `(origin, seq)`: received, but its causal
-    /// dependencies are not yet satisfied (`docs/spec.md` §9.4).
+    /// dependencies are not yet satisfied (`SPEC.md` §4.3).
     Buffer {
         at: u64,
         node: NodeId,
@@ -82,7 +82,7 @@ pub enum TraceRecord {
         seq: u64,
     },
     /// A node's causal buffer was full and `(origin, seq)` was evicted to
-    /// make room (`docs/spec.md` §9.4). Recoverable: the next anti-entropy
+    /// make room (`DESIGN.md` D-013). Recoverable: the next anti-entropy
     /// round re-offers it.
     DropCausalOverflow {
         at: u64,
@@ -96,9 +96,9 @@ pub enum TraceRecord {
         sent: u64,
     },
     /// `witness` independently verified a proof that `accused` signed two
-    /// different entries at `(accused, seq)` (`docs/spec.md` §11, M4).
+    /// different entries at `(accused, seq)` (`DESIGN.md` D-007).
     /// Derived the same way as `Apply`/`Buffer`: by diffing `State` before
-    /// and after a `step` call (`docs/spec.md` §9.6).
+    /// and after a `step` call.
     Equivocation {
         at: u64,
         witness: NodeId,
@@ -254,7 +254,7 @@ fn render_envelope(e: &Envelope) -> String {
     }
 }
 
-/// The entry's meaning (`docs/spec.md` §7.2). M3 is the first milestone in
+/// The entry's meaning. M3 is the first milestone in
 /// which the body carries anything, and a trace a human cannot read is a trace
 /// a human cannot debug. Same canonical rules as everything else here: fixed
 /// field order, zero-padded integers, no floats.
@@ -369,8 +369,8 @@ mod tests {
     }
 
     /// A claim and a withdrawal for the same task must not render alike:
-    /// `docs/spec.md` §6.1 makes the trace a fingerprint of the *model*, and
-    /// M3's model distinguishes these two (`docs/spec.md` §7.2).
+    /// the trace is a fingerprint of the *model*, and M3's model
+    /// distinguishes these two.
     #[test]
     fn claim_and_withdrawal_render_distinctly() {
         let mut e = entry();

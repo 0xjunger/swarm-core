@@ -1,4 +1,4 @@
-//! The policy gate (`DESIGN.md` §4.5): every effect must pass through
+//! The policy gate (`DESIGN.md` D-005): every effect must pass through
 //! [`commit`], which checks the action's consistency class. No effect exists
 //! outside this path — that is invariant I6, structurally discharged.
 //!
@@ -6,12 +6,12 @@
 //!
 //! Only [`Class::Degradable`] actions exist — no type in this crate
 //! implements [`Action`] with [`Class::ExclusiveCostly`] or
-//! [`Class::SafetyCritical`] (docs/spec.md §15). [`commit`] cannot
+//! [`Class::SafetyCritical`] (`SPEC.md` §6.5). [`commit`] cannot
 //! be called on an action that does not exist; that is I5, structurally
 //! discharged, and the `compile_fail` doctest on [`SafetyCriticalAction`]
 //! is its concrete proof. The certificate types Phase 2 will need
 //! (`QuorumCert`, `OperatorSig`, `GlobalThresholdCert`) are not named yet —
-//! `DESIGN.md` §11.4 forbids adding a variant before something uses it.
+//! a variant is not added before something uses it.
 
 use alloc::vec::Vec;
 
@@ -32,7 +32,8 @@ pub enum Class {
     SafetyCritical,
 }
 
-/// An action that may produce effects, gated by its [`Class`] and [`Cert`].
+/// An action that may produce effects, gated by its [`Class`] and its
+/// associated `Cert` type.
 pub trait Action {
     const CLASS: Class;
     type Cert;
@@ -44,7 +45,7 @@ pub trait Action {
 // ---------------------------------------------------------------------------
 
 /// Claims a task for this node. Converges via the task-claim CRDT
-/// (`docs/spec.md` §10); no certificate needed.
+/// (`SPEC.md` §6.3); no certificate needed.
 pub struct TaskClaim {
     pub task: TaskId,
     pub priority: u8,
@@ -76,7 +77,7 @@ impl Action for Withdraw {
 }
 
 /// Spends one unit of this node's escrow budget. The per-node cap makes I4
-/// structural (`docs/spec.md` §13); no certificate needed.
+/// structural (`SPEC.md` §6.4); no certificate needed.
 pub struct Spend {
     pub amount: u64,
 }
@@ -99,7 +100,7 @@ impl Action for Spend {
 /// Stub only — not implemented in Phase 1.
 ///
 /// I5, made structural rather than executable
-/// (docs/spec.md §15): `SafetyCriticalAction` does not implement
+/// (`SPEC.md` §6.5): `SafetyCriticalAction` does not implement
 /// [`Action`], so [`commit`] cannot be called on it — there is no `Cert`
 /// type to supply. A safety-critical effect without a valid certificate is
 /// therefore not a runtime state this program can reach; it is a program
@@ -198,7 +199,7 @@ pub fn author_and_commit<A: Action>(
     }
     // If `commit` refuses, the entry still stays in the log (traceability) —
     // just no effect is emitted; the action is recorded as refused
-    // (`DESIGN.md` §4.5).
+    // (`DESIGN.md` D-005).
 }
 
 #[cfg(test)]

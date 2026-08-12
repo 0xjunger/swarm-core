@@ -1,0 +1,8 @@
+bundle: overspend.bundle
+spec: overspend.spec
+chains: none
+I1: Satisfied
+I2: Satisfied
+I3: Undetermined — fewer than two observers to compare
+I4: Violated — Witness::Overspend (node 0, budget 3, evidenced by its two Spend entries)
+exit code (swarm-verify CLI): 1

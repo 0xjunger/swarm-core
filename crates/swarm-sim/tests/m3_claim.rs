@@ -1,8 +1,8 @@
-//! M3's acceptance test (`DESIGN.md` §9, "Bitti sayılır", verbatim):
+//! M3's acceptance criterion (`SPEC.md` §6.3, I3):
 //!
-//! "İki partisyon aynı görevi talep ediyor, birleşme sonrası **her iki node
-//! da aynı kazananı** hesaplıyor (kimse 'ben kazandım' sanmıyor). Ve kaybeden
-//! node'un log'unda geri çekilme kaydı var."
+//! Two partitions claim the same task. After they heal, **both nodes
+//! compute the same winner** — neither believes it won — and the losing
+//! node's log carries a withdrawal record.
 //!
 //! The partition shape is M2's — `{A,B}` against `{C}` — because that is what
 //! makes the claims genuinely concurrent: both sides claim task 0 while they
@@ -28,12 +28,11 @@ fn cfg(seed: u64, loss_permille: u32) -> SimConfig {
         nodes: 3,
         seed,
         // `entry_period: 40` also matters for a reason M2 did not have: a
-        // node can only withdraw on an `entry_period` tick
-        // (`docs/spec.md` §10.6), so the tail must hold the *whole* losing
-        // sequence — heal, rival claim arrives, next period authors the
-        // withdrawal, withdrawal propagates. Healing at 101 with authoring
-        // ticks at 120 and a 30-tick quiet tail leaves room for exactly
-        // that.
+        // node can only withdraw on an `entry_period` tick, so the tail must
+        // hold the *whole* losing sequence — heal, rival claim arrives, next
+        // period authors the withdrawal, withdrawal propagates. Healing at
+        // 101 with authoring ticks at 120 and a 30-tick quiet tail leaves
+        // room for exactly that.
         ticks: 150,
         loss_permille,
         delay_min: 1,
@@ -53,7 +52,7 @@ fn cfg(seed: u64, loss_permille: u32) -> SimConfig {
 }
 
 /// The bodies in a node's *own* chain — the log the acceptance criterion
-/// talks about when it says "kaybeden node'un log'unda".
+/// talks about when it says "the losing node's log".
 fn own_bodies(state: &State) -> Vec<Body> {
     state.log().entries().iter().map(|e| e.body).collect()
 }
@@ -72,11 +71,11 @@ fn claimed(state: &State, task: TaskId) -> bool {
 // The criterion, clause by clause
 // ---------------------------------------------------------------------------
 
-/// Clause 1: "her iki node da aynı kazananı hesaplıyor."
+/// Clause 1: "both nodes compute the same winner."
 ///
 /// Not "a winner exists" — every node names the *same* one, for every task
-/// any of them knows about. This is invariant I3 at M3 (`docs/spec.md`
-/// §13) observed end to end.
+/// any of them knows about. This is invariant I3 at M3 (`SPEC.md` §6.3)
+/// observed end to end.
 #[test]
 fn every_node_computes_the_same_winner_for_every_task() {
     let (_, states) = run_with_states(&cfg(7, 0));
@@ -103,7 +102,7 @@ fn every_node_computes_the_same_winner_for_every_task() {
     }
 }
 
-/// Clause 1, the sharp edge: "kimse 'ben kazandım' sanmıyor."
+/// Clause 1, the sharp edge: "nobody thinks 'I won.'"
 ///
 /// A node believes it won a task exactly when it is that task's winner in its
 /// own derived state. Since every node agrees on the winner (above), at most
@@ -132,14 +131,14 @@ fn exactly_one_node_believes_it_won_each_contested_task() {
     }
 }
 
-/// Clause 2: "kaybeden node'un log'unda geri çekilme kaydı var" — and the
+/// Clause 2: "the losing node's log has a withdrawal record" — and the
 /// mirror image, which the criterion implies but does not say: the winner
 /// must *not* withdraw.
 ///
 /// Task 0 is the one both partitions claim: every node's first claim is task
-/// 0 (`docs/spec.md` §10.6), and the first authoring tick is 40, well inside
-/// the partition. So this is a genuine concurrent contest across the split,
-/// which is what `DESIGN.md` asks for.
+/// 0, and the first authoring tick is 40, well inside the partition. So
+/// this is a genuine concurrent contest across the split, which is what
+/// the acceptance criterion asks for.
 #[test]
 fn the_losers_of_the_contested_task_withdraw_and_the_winner_does_not() {
     let (_, states) = run_with_states(&cfg(7, 0));
@@ -215,7 +214,7 @@ fn the_criterion_holds_under_loss_across_seeds() {
 }
 
 /// A node never withdraws from a task it did not claim, and never withdraws
-/// twice from the same one (`docs/spec.md` §10.5: losing is monotone).
+/// twice from the same one (`SPEC.md` §6.3: losing is monotone).
 #[test]
 fn withdrawals_are_at_most_one_per_claimed_task() {
     let (_, states) = run_with_states(&cfg(3, 200));
