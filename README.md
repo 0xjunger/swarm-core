@@ -41,11 +41,6 @@ narrated walkthrough: partition, contested task claims, healing,
 convergence, and an equivocating node caught with no consensus involved at
 all.
 
-## Maturity
-
-This is a research prototype. It is not audited. It is not for production
-use.
-
 ## Design constraints
 
 Swarm Core's core crate follows two constraints as non-negotiable design
