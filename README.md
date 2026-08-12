@@ -79,9 +79,6 @@ See `DESIGN.md` for why each of these holds.
 | `crates/swarm-sim/` | The deterministic simulator used to produce and test scenarios. |
 | `crates/swarm-verify/` | The external verifier: `LogBundle` + `Spec` → `Verdict`, from bytes alone. |
 | `LICENSE` / `NOTICE` | Licensing. |
-| `SECURITY.md` | Scope and reporting process for a security concern. |
-| `CONTRIBUTING.md` | How to build, how to test, and the project's writing rules. |
-| `CODE_OF_CONDUCT.md` | Community conduct expectations. |
 
 ## Building and testing
 
